@@ -2,7 +2,7 @@
 
 This is a separately maintained Kurumi add-on repository; it is not a GitHub fork. It connects Kurumi's transparent animation frames to the DSH BigFish plugin's state protocol and native macOS Helper. Install the upstream [QCYTSN/dsh-dafeiyu](https://github.com/QCYTSN/dsh-dafeiyu) separately. Its authors retain credit for the original project code and features.
 
-The pet stays still at idle. A click or DSH status event plays one action once, then returns to idle. The old idle, thinking, and working loops no longer autoplay. DSH's Reduced Motion setting freezes ambient loops while preserving click and status-triggered one-shots. The ribbon-adjustment response now uses nine transparent key poses at 180 ms per pose; it is not a complete 24 fps video. Kurumi has no animal tail; touching the hair accessory triggers the one-shot response.
+The pet stays still at idle. A click or DSH status event plays one action once, then returns to idle. The old idle, thinking, and working loops no longer autoplay. DSH's Reduced Motion setting freezes ambient loops while preserving click and status-triggered one-shots. All three click responses now use 240 ms per pose before returning to idle. They are transparent key-pose sequences, not complete 24 fps videos. Kurumi has no animal tail; touching the hair accessory triggers the one-shot response.
 
 | Idle | Thinking / waiting |
 | --- | --- |

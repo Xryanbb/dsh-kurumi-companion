@@ -90,9 +90,9 @@ const selection = {
       interpolationWindow: 0.45,
       normalizeToSkinScale: true,
     },
-    INTERACTION_HEAD_PAT: { frames: headPatFramePaths, frameMs: 120, loop: false, blendFrames: true },
-    INTERACTION_POKE: { frames: pokeFramePaths, frameMs: 120, loop: false, blendFrames: true },
-    INTERACTION_HAIR_RIBBON: { frames: hairRibbonFramePaths, frameMs: 180, loop: false, blendFrames: true, normalizeToSkinScale: true },
+    INTERACTION_HEAD_PAT: { frames: headPatFramePaths, frameMs: 240, loop: false, blendFrames: true },
+    INTERACTION_POKE: { frames: pokeFramePaths, frameMs: 240, loop: false, blendFrames: true },
+    INTERACTION_HAIR_RIBBON: { frames: hairRibbonFramePaths, frameMs: 240, loop: false, blendFrames: true, normalizeToSkinScale: true },
   },
 }
 if (args.includes('--dry-run')) {
