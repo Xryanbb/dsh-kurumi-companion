@@ -57,6 +57,7 @@ const hairRibbonFrameNames = happyFrameNames
 const hairRibbonFrameSources = hairRibbonFrameNames.map((name) => join(hairRibbonFrameSource, name))
 const hairRibbonFramePaths = hairRibbonFrameNames.map((name) => join(hairRibbonFrameTarget, name))
 const greetingFrameNames = [
+  'wave-start-v1.png',
   'wave-anticipation-v1.png',
   'wave-intermediate-v1.png',
   'wave-intermediate-v2.png',
@@ -99,11 +100,12 @@ const selection = {
     WORKING: { frames: workingFramePaths, frameMs: 360, loop: true },
     SUCCESS: {
       enter: [images.idle, greetingFramePaths[0]],
-      body: [greetingFramePaths[1], greetingFramePaths[2], greetingFramePaths[1]],
-      exit: [greetingFramePaths[3], greetingFramePaths[4], images.idle],
+      body: [greetingFramePaths[1], greetingFramePaths[2], greetingFramePaths[3], greetingFramePaths[2]],
+      exit: [greetingFramePaths[4], greetingFramePaths[0], greetingFramePaths[5], images.idle],
       frameMs: 120,
       loop: false,
       interpolate: true,
+      interpolationWindow: 0.45,
       normalizeToSkinScale: true,
     },
     INTERACTION_HEAD_PAT: { frames: headPatFramePaths, frameMs: 120, loop: false },

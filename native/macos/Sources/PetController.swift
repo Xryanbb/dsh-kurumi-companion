@@ -33,6 +33,7 @@ final class PetController: NSObject {
         let frameMs: Double
         let loops: Bool
         let interpolates: Bool
+        let interpolationWindow: Double
         let normalizesToSkinScale: Bool
 
         var frames: [String] { enterFrames + bodyFrames + exitFrames }
@@ -88,7 +89,7 @@ final class PetController: NSObject {
     /// Optional local poses use lightweight native motion. Once an idle image
     /// is loaded, missing poses always fall back to that image.
     private var customSkinImage: NSImage?
-    private var customSkinFrameFit: CGFloat?
+    private var customSkinFrameVisualHeight: CGFloat?
     private var customSkin3D = false
     private var sceneView: Kurumi3DView?
     private var customStateImages: [String: NSImage] = [:]
@@ -297,6 +298,7 @@ final class PetController: NSObject {
                     frameMs: min(10_000, max(10, requestedFrameMs)),
                     loops: (definition["loop"] as? Bool) ?? false,
                     interpolates: (definition["interpolate"] as? Bool) ?? false,
+                    interpolationWindow: min(1, max(0.1, (definition["interpolationWindow"] as? NSNumber)?.doubleValue ?? 1)),
                     normalizesToSkinScale: (definition["normalizeToSkinScale"] as? Bool) ?? false
                 )
             }
@@ -359,7 +361,9 @@ final class PetController: NSObject {
         normalized.scaleBy(x: rasterScale, y: rasterScale)
         normalized.interpolationQuality = .high
         let fit = min(canvas.height * 0.77 / bounds.height, canvas.width * 0.78 / bounds.width)
-        if cacheTexture, customSkinFrameFit == nil { customSkinFrameFit = fit }
+        if cacheTexture, customSkinFrameVisualHeight == nil {
+            customSkinFrameVisualHeight = bounds.height * fit
+        }
         let visual = CGSize(width: bounds.width * fit, height: bounds.height * fit)
         normalized.draw(cropped, in: CGRect(x: (canvas.width - visual.width) / 2,
                                             y: canvas.height * 0.04,
@@ -386,8 +390,14 @@ final class PetController: NSObject {
               let bounds = visibleAlphaBounds(of: source),
               let cropped = source.cropping(to: bounds) else { return nil }
         let canvas = CGSize(width: maxFrameWidth, height: maxFrameHeight)
-        let fit = normalizesToSkinScale ? customSkinFrameFit : nil
-        let actualFit = fit ?? min(canvas.height * 0.77 / bounds.height, canvas.width * 0.78 / bounds.width)
+        let actualFit: CGFloat
+        if normalizesToSkinScale, let targetHeight = customSkinFrameVisualHeight {
+            // Match visible height and baseline to the approved idle artwork.
+            // Give wide poses room for a lifted arm without letting them jump in scale.
+            actualFit = min(targetHeight / bounds.height, canvas.width * 0.9 / bounds.width)
+        } else {
+            actualFit = min(canvas.height * 0.77 / bounds.height, canvas.width * 0.78 / bounds.width)
+        }
         let visual = CGSize(width: bounds.width * actualFit, height: bounds.height * actualFit)
         let rasterScale: CGFloat = 2
         guard let normalized = CGContext(data: nil, width: Int(canvas.width * rasterScale),
@@ -1428,8 +1438,14 @@ final class PetController: NSObject {
         guard let current = texture(at: frameIndex) else { return nil }
         guard let nextIndex = nextIndex else { return current }
         let t = min(1, max(0, fraction))
-        let eased = t * t * t * (t * (t * 6 - 15) + 10)
-        let blend = sequence.interpolates ? eased : min(1, max(0, (fraction - 0.72) / 0.28))
+        let blend: Double
+        if sequence.interpolates {
+            let window = sequence.interpolationWindow
+            let progress = min(1, max(0, (t - (1 - window)) / window))
+            blend = progress * progress * progress * (progress * (progress * 6 - 15) + 10)
+        } else {
+            blend = min(1, max(0, (fraction - 0.72) / 0.28))
+        }
         guard blend > 0, let next = texture(at: nextIndex) else { return current }
         return current.applyingFilter("CIDissolveTransition", parameters: [
             kCIInputTargetImageKey: next,

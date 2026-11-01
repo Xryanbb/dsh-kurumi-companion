@@ -19,9 +19,9 @@
 
 ## v3 挥手分段
 
-- `wave-anticipation-v1.png`、`wave-intermediate-v1.png`、`wave-intermediate-v2.png`、`wave-recovery-v1.png`、`wave-lowered-v1.png` 是 5 张高分辨率透明关键帧，统一为 1377×1142 画布。
-- 新 `SUCCESS` 时间线：批准待机帧 → 抬手入场 → 两次挥手主体 → 放下手臂 → 回到批准待机帧。
-- `kurumi-wave-v2-preview.gif` 按 helper 的统一比例、脚底基线与 120ms 关键姿势节拍生成缓和过渡预览；macOS helper 则在窗口绘制时以 60 Hz 采样同一序列。它仍是关键帧插值，不是 24fps 的原生逐帧视频。
+- `wave-start-v1.png` 与 `wave-anticipation-v1.png`、`wave-intermediate-v1.png`、`wave-intermediate-v2.png`、`wave-recovery-v1.png`、`wave-lowered-v1.png` 是 6 张高分辨率透明关键帧；起势帧与批准待机图保持 1374×1145 原尺寸，其余动作为 1377×1142。
+- 新 `SUCCESS` 时间线：批准待机帧 → 轻抬手起势 → 抬手入场 → 两次挥手主体 → 放下手臂至腰侧 → 轻收手 → 回到批准待机帧。
+- `kurumi-wave-v2-preview.gif` 按批准待机图的可见高度、脚底基线与 120ms 关键姿势节拍生成预览；每拍先稳定展示，再在最后 45% 时长淡入下一帧。macOS helper 在窗口绘制时以 60 Hz 采样同一序列。它仍是关键帧插值，不是 24fps 的原生逐帧视频。
 - [wave-prompt-v3.md](wave-prompt-v3.md) 记录新增关键帧的整理版生成提示词、各姿势说明和验收约束。
 
-生成过程中还做过早期排版、越界招手和串格翻书试稿；它们未进入皮肤，也不放入 GitHub 发行内容。当前安装素材目录只放已采用帧。原有七组序列共 60 张透明关键帧；新增的 5 张姿势关键帧用于 v3 招手动作，不等同 Windows 参考版 24fps、100 段动作库。真实 macOS helper 播放仍待宿主验收。
+生成过程中还做过早期排版、越界招手和串格翻书试稿；它们未进入皮肤，也不放入 GitHub 发行内容。当前安装素材目录只放已采用帧。原有七组序列共 60 张透明关键帧；新增的 6 张姿势关键帧用于 v3 招手动作，不等同 Windows 参考版 24fps、100 段动作库。真实 macOS helper 播放仍待宿主验收。

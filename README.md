@@ -2,7 +2,7 @@
 
 这是单独维护的狂三桌宠扩展项目，GitHub 仓库不属于 fork。它把狂三透明动作帧接到 DSH 大肥鱼插件的状态协议与 macOS 原生 Helper 上；需要另行安装官方 [QCYTSN/dsh-dafeiyu](https://github.com/QCYTSN/dsh-dafeiyu)。原作者和贡献者保有原项目代码及功能的署名。
 
-当前有 60 张独立透明帧，组成待机、思考、翻书、招手、摸头回应、戳击回应和整理发带七组动作。另新增一段分为入场、主体和收势的挥手动作，首尾回到批准的待机立绘；相邻姿势按待机图的比例与脚底基线对齐，再用缓和过渡连接。空闲时会按 DSH 活动等级间隔轮换思考与招手；新任务会打断装饰动作。狂三没有动物尾巴，点击发饰区域播放整理发带动作。
+当前有 60 张独立透明帧，组成待机、思考、翻书、招手、摸头回应、戳击回应和整理发带七组动作。另新增一段分为入场、主体和收势的挥手动作，首尾回到批准的待机立绘；相邻姿势按待机图的可见高度与脚底基线对齐，减少手臂抬起时整身缩放跳变，并在每拍末尾短暂淡入下一姿势。空闲时会按 DSH 活动等级间隔轮换思考与招手；新任务会打断装饰动作。狂三没有动物尾巴，点击发饰区域播放整理发带动作。
 
 | 待机 | 思考 / 等待 |
 | --- | --- |
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | ![狂三摸头回应](extras/kurumi-animation/generated/kurumi-head-pat-preview.gif) | ![狂三戳击回应](extras/kurumi-animation/generated/kurumi-poke-preview.gif) | ![狂三整理发带](extras/kurumi-animation/generated/kurumi-hair-ribbon-preview.gif) |
 
-旧预览 GIF 展示透明帧顺序，不包含 Helper 的姿态混合。新版招手预览按 Helper 的公共比例和脚底基线对齐，再生成缓和过渡画面。详细的动作对应和来源见 [Windows 动作参考](extras/kurumi-animation/windows-action-port.md)、[素材提示词](extras/kurumi-animation/generated/wave-prompt-v3.md) 与 [NOTICE](NOTICE.md)。
+旧预览 GIF 展示透明帧顺序，不包含 Helper 的姿态混合。新版招手预览按 Helper 的可见高度和脚底基线对齐，再生成缓和过渡画面。详细的动作对应和来源见 [Windows 动作参考](extras/kurumi-animation/windows-action-port.md)、[素材提示词](extras/kurumi-animation/generated/wave-prompt-v3.md) 与 [NOTICE](NOTICE.md)。
 
 ## 安装
 

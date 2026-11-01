@@ -2,16 +2,19 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-guard CommandLine.arguments.count == 6,
+guard CommandLine.arguments.count == 6 || CommandLine.arguments.count == 7,
       let frameCount = Int(CommandLine.arguments[2]), frameCount > 1,
       let keyframeDelayMs = Double(CommandLine.arguments[3]), keyframeDelayMs >= 10,
       let subframes = Int(CommandLine.arguments[4]), subframes > 0 else {
-    fputs("Usage: swift preview-sequence.swift <frame-directory> <frame-count> <keyframe-delay-ms> <subframes> <output.gif>\n", stderr)
+    fputs("Usage: swift preview-sequence.swift <frame-directory> <frame-count> <keyframe-delay-ms> <subframes> [transition-window] <output.gif>\n", stderr)
     exit(2)
 }
 
 let frameDirectory = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
-let outputURL = URL(fileURLWithPath: CommandLine.arguments[5])
+let outputURL = URL(fileURLWithPath: CommandLine.arguments.last!)
+let transitionWindow = CommandLine.arguments.count == 7
+    ? min(1, max(0.1, Double(CommandLine.arguments[5]) ?? 1))
+    : 1
 let sourceFrames: [CGImage] = try (1...frameCount).map { index in
     let url = frameDirectory.appendingPathComponent(String(format: "frame-%03d.png", index))
     guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
@@ -70,6 +73,7 @@ func visibleBounds(_ image: CGImage) throws -> CGRect {
 let anchorBounds = try visibleBounds(sourceFrames[0])
 let anchorFit = min(canvasHeight * 0.77 / anchorBounds.height,
                     canvasWidth * 0.78 / anchorBounds.width)
+let targetVisualHeight = anchorBounds.height * anchorFit
 func normalize(_ image: CGImage) throws -> CGImage {
     let bounds = try visibleBounds(image)
     guard let cropped = image.cropping(to: bounds),
@@ -81,8 +85,9 @@ func normalize(_ image: CGImage) throws -> CGImage {
     }
     context.scaleBy(x: rasterScale, y: rasterScale)
     context.interpolationQuality = .high
-    let visualWidth = bounds.width * anchorFit
-    let visualHeight = bounds.height * anchorFit
+    let fit = min(targetVisualHeight / bounds.height, canvasWidth * 0.9 / bounds.width)
+    let visualWidth = bounds.width * fit
+    let visualHeight = bounds.height * fit
     context.draw(cropped, in: CGRect(x: (canvasWidth - visualWidth) / 2,
                                      y: canvasHeight * 0.04,
                                      width: visualWidth, height: visualHeight))
@@ -152,7 +157,8 @@ for index in 0..<(normalizedFrames.count - 1) {
     let nextPixels = try rgba(normalizedFrames[index + 1])
     for step in 1..<subframes {
         let t = Double(step) / Double(subframes)
-        let eased = t * t * t * (t * (t * 6 - 15) + 10)
+        let progress = min(1, max(0, (t - (1 - transitionWindow)) / transitionWindow))
+        let eased = progress * progress * progress * (progress * (progress * 6 - 15) + 10)
         add(try blend(previousPixels, nextPixels, amount: eased), delay: outputDelay, to: destination)
     }
     add(normalizedFrames[index + 1], delay: outputDelay, to: destination)
