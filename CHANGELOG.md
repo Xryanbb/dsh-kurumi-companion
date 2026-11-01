@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added a new nine-pose transparent hair-ribbon response, slowed to 180 ms per pose, with a one-shot preview and updated skin installer mapping.
 - Added a staged 2D Kurumi greeting with a new arm-lift pose, repeated wave beats, and recovery to the approved idle portrait.
 - Normalized each pose to the approved idle's visible height and foot baseline; shortened the crossfade to the last 45% of each keyframe beat to reduce scale jumps and ghosting.
 - Added explicit enter/body/exit playback, a transparent preview, and generation-prompt notes.

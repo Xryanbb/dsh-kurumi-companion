@@ -17,6 +17,13 @@
 - 三段交互以 120ms/帧单次播放。相邻动作使用独立帧序列，不把摸头、戳击或整理发带伪装为招手。
 - `kurumi-head-pat-preview.gif`、`kurumi-poke-preview.gif`、`kurumi-hair-ribbon-preview.gif` 是动作示例；不包含原生 helper 的姿态淡化。
 
+## 整理发带 v2
+
+- `interaction-sheets-v2/kurumi-hair-ribbon-v2-sheet-preview.png` 是内置 imagegen 生成的 3×3 透明动作表缩略图，原图留在本地生成档案；参考已批准的 `reference/idle-approved.png` 和 v1 摸头动作表，角色比例、黑红服装、双马尾和异色瞳按参考图保持，未加入动物尾巴。
+- [kurumi-hair-ribbon-prompt-v2.md](kurumi-hair-ribbon-prompt-v2.md) 记录生成提示词。3×3 网格由 CoreGraphics 按像素等分裁切，每格向内缩 8 px 去掉格边碎片；裁切后保留 RGBA 透明通道。采用的 9 张帧位于 `../../kurumi-skin/animations/hair_ribbon_v3/`。
+- `kurumi-hair-ribbon-v2-preview-web.gif` 按 180ms/帧播放一次，时长约 1.62 秒；桌宠配置同样为单次播放，并按批准待机立绘归一尺寸，结束返回静止待机。
+- 这段是 9 张绘制关键姿势构成的透明序列，不是 24fps 视频；其他交互仍使用 v1 姿势素材。
+
 ## v3 挥手分段
 
 - `wave-start-v1.png` 与 `wave-anticipation-v1.png`、`wave-intermediate-v1.png`、`wave-intermediate-v2.png`、`wave-recovery-v1.png`、`wave-lowered-v1.png` 是 6 张高分辨率透明关键帧；起势帧与批准待机图保持 1374×1145 原尺寸，其余动作为 1377×1142。

@@ -2,7 +2,7 @@
 
 这是单独维护的狂三桌宠扩展项目，GitHub 仓库不属于 fork。它把狂三透明动作帧接到 DSH 大肥鱼插件的状态协议与 macOS 原生 Helper 上；需要另行安装官方 [QCYTSN/dsh-dafeiyu](https://github.com/QCYTSN/dsh-dafeiyu)。原作者和贡献者保有原项目代码及功能的署名。
 
-桌宠待机保持静止；点击互动或 DSH 状态事件才播放一次动作，结束回到待机。旧的待机、思考和工作循环帧不再自动播放。DSH 的“减少动态效果”会冻结环境循环帧，但保留点击和状态事件触发的单次动作。当前动作素材仍是透明关键姿势序列，不是完整 24fps 视频；Runway 免费生成恢复后再替换为高帧率片段。狂三没有动物尾巴，点击发饰区域播放整理发带动作。
+桌宠待机保持静止；点击互动或 DSH 状态事件才播放一次动作，结束回到待机。旧的待机、思考和工作循环帧不再自动播放。DSH 的“减少动态效果”会冻结环境循环帧，但保留点击和状态事件触发的单次动作。点击发饰时会播放新制作的 9 帧整理发带动作，节拍放慢到 180ms/帧。它是透明关键姿势序列，不是完整 24fps 视频。狂三没有动物尾巴。
 
 | 待机 | 思考 / 等待 |
 | --- | --- |
@@ -18,9 +18,9 @@
 
 | 摸头回应 | 戳击回应 | 整理发带 |
 | --- | --- | --- |
-| ![狂三摸头回应](extras/kurumi-animation/generated/kurumi-head-pat-preview.gif) | ![狂三戳击回应](extras/kurumi-animation/generated/kurumi-poke-preview.gif) | ![狂三整理发带](extras/kurumi-animation/generated/kurumi-hair-ribbon-preview.gif) |
+| ![狂三摸头回应](extras/kurumi-animation/generated/kurumi-head-pat-preview.gif) | ![狂三戳击回应](extras/kurumi-animation/generated/kurumi-poke-preview.gif) | ![狂三整理发带 v2](extras/kurumi-animation/generated/kurumi-hair-ribbon-v2-preview-web.gif) |
 
-这些 GIF 是制作过程的动作示例，部分仍展示旧循环帧，不能代表当前静止待机设置，也不是 24fps 成品片段。详细的动作对应和来源见 [Windows 动作参考](extras/kurumi-animation/windows-action-port.md)、[素材提示词](extras/kurumi-animation/generated/wave-prompt-v3.md) 与 [NOTICE](NOTICE.md)。
+前两段 GIF 是早期动作示例；发带 v2 预览与当前 9 帧单次动作一致。桌宠待机仍保持静止，点击发饰才播放。详细来源见 [动画素材记录](extras/kurumi-animation/generated/README.md)、[Windows 动作参考](extras/kurumi-animation/windows-action-port.md) 与 [NOTICE](NOTICE.md)。
 
 ## 安装
 

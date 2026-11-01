@@ -34,9 +34,9 @@
 
 | 摸头回应 | 戳击回应 | 整理发带 |
 | --- | --- | --- |
-| ![狂三摸头回应](generated/kurumi-head-pat-preview.gif) | ![狂三戳击回应](generated/kurumi-poke-preview.gif) | ![狂三整理发带](generated/kurumi-hair-ribbon-preview.gif) |
+| ![狂三摸头回应](generated/kurumi-head-pat-preview.gif) | ![狂三戳击回应](generated/kurumi-poke-preview.gif) | ![狂三整理发带 v2](generated/kurumi-hair-ribbon-v2-preview-web.gif) |
 
-点击右侧发饰区域播放“整理发带”。狂三没有动物尾巴，因此没有尾巴点击交互。
+点击右侧发饰区域播放“整理发带”。新版动作使用 9 张透明关键姿势、180ms/帧、单次播放；结束回到静止待机。逐帧素材、网格原图和生成记录见 [generated/README.md](generated/README.md)。狂三没有动物尾巴，因此没有尾巴点击交互。
 
 Windows 动作参考和狂三移植边界见 [`windows-action-port.md`](windows-action-port.md)。优先复用 Windows 版的大量动作状态、触发节奏和拖拽物理，保持狂三身份；大肥鱼角色帧图不当作狂三素材。
 

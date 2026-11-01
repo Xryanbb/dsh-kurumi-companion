@@ -16,14 +16,14 @@ const approvedIdleSource = join(skinRoot, '../kurumi-animation/reference/idle-ap
 const happyFrameSource = join(skinRoot, 'animations', 'happy')
 const headPatFrameSource = join(skinRoot, 'animations', 'head_pat')
 const pokeFrameSource = join(skinRoot, 'animations', 'poke')
-const hairRibbonFrameSource = join(skinRoot, 'animations', 'hair_ribbon')
+const hairRibbonFrameSource = join(skinRoot, 'animations', 'hair_ribbon_v3')
 const dshHome = resolve(process.env.DSH_HOME || join(homedir(), '.dsh'))
 const directory = join(dshHome, 'dsh-dafeiyu')
 const target = join(directory, 'skins', 'kurumi-animated-v3')
 const happyFrameTarget = join(target, 'animations', 'happy-wave-v1')
 const headPatFrameTarget = join(target, 'animations', 'head-pat-v1')
 const pokeFrameTarget = join(target, 'animations', 'poke-v1')
-const hairRibbonFrameTarget = join(target, 'animations', 'hair-ribbon-v1')
+const hairRibbonFrameTarget = join(target, 'animations', 'hair-ribbon-v2')
 const greetingFrameSource = join(skinRoot, '../kurumi-animation/generated')
 const greetingFrameTarget = join(target, 'animations', 'greeting-wave-v1')
 const selectionPath = join(directory, 'skin.json')
@@ -38,7 +38,7 @@ const headPatFramePaths = headPatFrameNames.map((name) => join(headPatFrameTarge
 const pokeFrameNames = Array.from({ length: 8 }, (_, index) => `frame-${String(index + 1).padStart(3, '0')}.png`)
 const pokeFrameSources = pokeFrameNames.map((name) => join(pokeFrameSource, name))
 const pokeFramePaths = pokeFrameNames.map((name) => join(pokeFrameTarget, name))
-const hairRibbonFrameNames = happyFrameNames
+const hairRibbonFrameNames = Array.from({ length: 9 }, (_, index) => `frame-${String(index + 1).padStart(3, '0')}.png`)
 const hairRibbonFrameSources = hairRibbonFrameNames.map((name) => join(hairRibbonFrameSource, name))
 const hairRibbonFramePaths = hairRibbonFrameNames.map((name) => join(hairRibbonFrameTarget, name))
 const greetingFrameNames = [
@@ -92,7 +92,7 @@ const selection = {
     },
     INTERACTION_HEAD_PAT: { frames: headPatFramePaths, frameMs: 120, loop: false, blendFrames: true },
     INTERACTION_POKE: { frames: pokeFramePaths, frameMs: 120, loop: false, blendFrames: true },
-    INTERACTION_HAIR_RIBBON: { frames: hairRibbonFramePaths, frameMs: 120, loop: false, blendFrames: true },
+    INTERACTION_HAIR_RIBBON: { frames: hairRibbonFramePaths, frameMs: 180, loop: false, blendFrames: true, normalizeToSkinScale: true },
   },
 }
 if (args.includes('--dry-run')) {
