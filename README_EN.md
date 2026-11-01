@@ -2,7 +2,7 @@
 
 This is a separately maintained Kurumi add-on repository; it is not a GitHub fork. It connects Kurumi's transparent animation frames to the DSH BigFish plugin's state protocol and native macOS Helper. Install the upstream [QCYTSN/dsh-dafeiyu](https://github.com/QCYTSN/dsh-dafeiyu) separately. Its authors retain credit for the original project code and features.
 
-The skin contains 60 unique transparent frames across seven sequences: idle, thinking, reading, greeting, head-pat, poke, and hair-ribbon response. The staged greeting adds six transparent key poses for a gentle arm lift, two wave beats, and a recovery to the approved idle portrait. Each pose matches the idle art's visible height and foot baseline; a short eased transition occupies the last 45% of each keyframe beat to reduce scale jumps and ghosting. Idle behavior occasionally alternates thinking and greeting according to DSH's activity interval. New tasks interrupt decorative actions. Kurumi has no animal tail; touching the hair-accessory area plays the ribbon-adjustment response.
+The pet stays still at idle. A click or DSH status event plays one action once, then returns to idle. The old idle, thinking, and working loops no longer autoplay. DSH's Reduced Motion setting freezes ambient loops while preserving click and status-triggered one-shots. The current artwork is still a sparse transparent key-pose sequence, not a complete 24 fps video; it will be replaced with higher-frame-rate clips when Runway Free generation is available again. Kurumi has no animal tail; touching the hair-accessory area plays the ribbon-adjustment response.
 
 | Idle | Thinking / waiting |
 | --- | --- |
@@ -20,7 +20,7 @@ The skin contains 60 unique transparent frames across seven sequences: idle, thi
 | --- | --- | --- |
 | ![Kurumi head-pat](extras/kurumi-animation/generated/kurumi-head-pat-preview.gif) | ![Kurumi poke](extras/kurumi-animation/generated/kurumi-poke-preview.gif) | ![Kurumi ribbon](extras/kurumi-animation/generated/kurumi-hair-ribbon-preview.gif) |
 
-Older GIFs show frame order without the Helper's pose mixing. The new greeting preview normalizes visible height and foot placement against the approved idle art before easing between poses. See the [Windows action mapping](extras/kurumi-animation/windows-action-port.md), [prompt set](extras/kurumi-animation/generated/wave-prompt-v3.md), and [NOTICE](NOTICE.md) for scope and attribution.
+These GIFs are production examples; some still show the older looped frames. They do not represent the current still-idle setting or finished 24 fps clips. See the [Windows action mapping](extras/kurumi-animation/windows-action-port.md), [prompt set](extras/kurumi-animation/generated/wave-prompt-v3.md), and [NOTICE](NOTICE.md) for scope and attribution.
 
 ## Install
 
@@ -45,7 +45,7 @@ To roll back, quit DSH, move the backed-up Helper back into the plugin directory
 - Helper code is derived from the original DSH desktop pet. This repository does not copy BigFish character frames.
 - This is a transparent keyframe solution, not Live2D or the Windows version's 100-clip library.
 - Tokisaki Kurumi is a character from *Date A Live*. The pictures are unofficial fan art; see [ASSET_LICENSE.md](ASSET_LICENSE.md).
-- The new click responses still need playback verification after restarting the DSH Host.
+- Autoplay loops are disabled. Click responses still use the older sparse key-pose sequences; replacing them with 24 fps transparent clips is not complete yet.
 
 ## Sources
 

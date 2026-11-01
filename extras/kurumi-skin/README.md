@@ -2,7 +2,7 @@
 
 桌宠主体与状态协议参考 [QCYTSN/dsh-dafeiyu](https://github.com/QCYTSN/dsh-dafeiyu)，原作者与贡献者保有原项目代码和功能贡献。本素材包新增狂三角色素材与 macOS 皮肤动作，不将原桌宠记作本次原创。
 
-`images/` 包含基础姿态和拖起反应。原有 `animations/` 有 60 张透明关键帧：待机、思考、翻书工作、招手、摸头、戳击和整理发带。新增挥手动作使用 6 张高分辨率透明关键帧，分为起势、挥手主体、收势三个阶段；helper 逐帧按批准待机图的可见高度和脚底基线归一，并在 60 Hz 绘制节奏中平滑连接姿势。每个 120ms 节拍先展示稳定姿势，再于末尾 45% 时长完成过渡，缩短叠影时间；动作最后一帧回到待机立绘。基础待机直接使用批准的高分辨率立绘。旧的戳击漫画符号格不会安装。狂三没有动物尾巴，因此没有对应的大肥鱼尾巴动作。这是独立制作的 2D 透明动画，不是 Live2D，也没有复制大肥鱼角色素材。
+`images/` 包含基础姿态和拖起反应。旧的 `animations/` 目录保留 60 张透明关键帧；当前选择文件不再让待机、思考和工作帧循环播放。点击互动或 DSH 状态事件会单次播放相应透明帧序列，结束回到待机。减少动态效果开启时，循环序列停在首帧，单次互动继续播放。素材仍是关键姿势，不是 24fps 视频片段。狂三没有动物尾巴，因此没有对应的大肥鱼尾巴动作；项目不复制大肥鱼角色素材。
 
 ## 安装选择
 
@@ -14,7 +14,7 @@ node extras/kurumi-skin/install-skin.mjs
 dsh web
 ```
 
-安装器把姿态图和关键帧新增到 `$DSH_HOME/dsh-dafeiyu/skins/kurumi-animated-v3/`，并写入 `$DSH_HOME/dsh-dafeiyu/skin.json`（含 `IDLE/THINKING/WAITING/WORKING/SUCCESS` 状态序列和 `INTERACTION_HEAD_PAT/INTERACTION_POKE/INTERACTION_HAIR_RIBBON` 点击动作；等待状态共用思考帧）。`SUCCESS` 挥手按入场、主体、收势顺序播放，并平滑回到待机；空闲动作遵循活动等级间隔，随机在思考与招手之间交替。v2 资源目录保留；已有皮肤选择会先保存为 `skin.json.backup-<timestamp>`。默认 `DSH_HOME` 为 `~/.dsh`；不修改其他插件、频道、模型或凭据，不结束进程。
+安装器把姿态图和单次动作帧新增到 `$DSH_HOME/dsh-dafeiyu/skins/kurumi-animated-v3/`，并写入 `$DSH_HOME/dsh-dafeiyu/skin.json`。`SUCCESS`、摸头、戳击和整理发带只在相应事件触发时播放一次；IDLE、THINKING、WAITING、WORKING 是静态姿态。`SUCCESS` 片段含起势、主体和收势帧，最后回到批准待机图。v2 资源目录保留；已有皮肤选择会先保存为 `skin.json.backup-<timestamp>`。默认 `DSH_HOME` 为 `~/.dsh`；不修改其他插件、频道、模型或凭据，不结束 DSH 进程。
 
 删除或移走 `skin.json` 后重启，可恢复插件原始皮肤；安装器保留的旧选择备份可用于恢复此前的自定义皮肤。
 

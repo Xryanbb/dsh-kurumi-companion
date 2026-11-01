@@ -33,6 +33,7 @@ final class PetController: NSObject {
         let frameMs: Double
         let loops: Bool
         let interpolates: Bool
+        let blendsFrames: Bool
         let interpolationWindow: Double
         let normalizesToSkinScale: Bool
 
@@ -95,7 +96,6 @@ final class PetController: NSObject {
     private var customStateImages: [String: NSImage] = [:]
     private var customInteractionImage: NSImage?
     private var customDraggingImage: NSImage?
-    private var customBlinkImage: NSImage?
     private var customFrameSequences: [String: CustomSkinFrameSequence] = [:]
     private var customFrameSequencePose: String?
     private var customFrameSequenceStartedAt: [String: Double] = [:]
@@ -105,47 +105,14 @@ final class PetController: NSObject {
     private var customInteractionPose: String?
     private var customActionPose: String?
     private var customActionUntil: CFTimeInterval = 0
-    private var lastCustomIdleAction: String?
     private var customPoseMixer = SkinPoseMixer()
     private var customDragSpring = DampedSkinSpring(frequency: 2.8, dampingRatio: 0.66)
     private var customTouchSpring = DampedSkinSpring(frequency: 3.6, dampingRatio: 0.62)
     private var customTextures: [ObjectIdentifier: CIImage] = [:]
     private let customFrameTextureCache = NSCache<NSString, CIImage>()
-    private var customBlinkMask: CIImage?
     private let customRenderContext = CIContext(options: [.cacheIntermediates: false])
     private lazy var customSoftwareContext = CIContext(options: [.useSoftwareRenderer: true, .cacheIntermediates: false])
     private var customRenderFallbackLogged = false
-    private static let customWarp = CIWarpKernel(source: """
-        kernel vec2 companionMotion(float time, float width, float height, float drag, float touch, float greeting, float reading) {
-            vec2 p = destCoord();
-            vec2 uv = p / vec2(width, height);
-            float unit = width / 412.0;
-            float hairY = smoothstep(0.10, 0.26, uv.y) * (1.0 - smoothstep(0.70, 0.86, uv.y));
-            float left = (1.0 - smoothstep(0.25, 0.40, uv.x)) * hairY;
-            float right = smoothstep(0.60, 0.75, uv.x) * hairY;
-            float head = (1.0 - smoothstep(0.12, 0.25, abs(uv.x - 0.5)))
-                * smoothstep(0.39, 0.58, uv.y) * (1.0 - smoothstep(0.83, 0.96, uv.y));
-            float body = (1.0 - smoothstep(0.13, 0.29, abs(uv.x - 0.5)))
-                * smoothstep(0.12, 0.26, uv.y) * (1.0 - smoothstep(0.42, 0.55, uv.y));
-            float amplitude = 3.6 + drag * 4.2 + touch * 2.0;
-            float dx = left * sin(time * 1.50 + uv.y * 3.0) * amplitude
-                + right * sin(time * 1.37 + uv.y * 3.3 + 1.25) * amplitude * 0.87
-                + head * sin(time * 0.91) * 2.2 - body * sin(time * 0.91 + 0.2) * 0.9;
-            float dy = left * sin(time * 1.23 + uv.y * 2.0 + 0.6) * 0.9
-                + right * sin(time * 1.31 + uv.y * 2.6 + 1.8) * 0.85
-                + head * sin(time * 1.7) * 0.85 + body * sin(time * 1.7) * 0.45;
-            float hand = 1.0 - smoothstep(0.55, 1.0, length((uv - vec2(0.345, 0.47)) / vec2(0.074, 0.096)));
-            vec2 elbow = vec2(width * 0.397, height * 0.408);
-            vec2 arm = p - elbow;
-            float wave = sin(time * 6.0) * 0.14 * greeting * hand;
-            vec2 handMotion = vec2(-arm.y, arm.x) * wave;
-            float book = (1.0 - smoothstep(0.11, 0.20, abs(uv.x - 0.5)))
-                * smoothstep(0.24, 0.31, uv.y) * (1.0 - smoothstep(0.42, 0.48, uv.y));
-            dy += reading * book * sin(time * 3.2 + 0.6) * 0.9;
-            return p - vec2(dx, dy) * unit - handMotion;
-        }
-        """)
-
     private(set) var panel: NSPanel?
     private(set) var contentView: PetView?
 
@@ -278,7 +245,6 @@ final class PetController: NSObject {
         }
         customInteractionImage = loadSkinImage(at: selection["interactionImagePath"] as? String)
         customDraggingImage = loadSkinImage(at: selection["draggingImagePath"] as? String)
-        customBlinkImage = loadSkinImage(at: selection["blinkImagePath"] as? String)
         if let sequences = selection["frameSequences"] as? [String: Any] {
             for (state, value) in sequences where Self.labels[state] != nil || state.hasPrefix("INTERACTION_") {
                 guard let definition = value as? [String: Any] else { continue }
@@ -298,6 +264,7 @@ final class PetController: NSObject {
                     frameMs: min(10_000, max(10, requestedFrameMs)),
                     loops: (definition["loop"] as? Bool) ?? false,
                     interpolates: (definition["interpolate"] as? Bool) ?? false,
+                    blendsFrames: (definition["blendFrames"] as? Bool) ?? true,
                     interpolationWindow: min(1, max(0.1, (definition["interpolationWindow"] as? NSNumber)?.doubleValue ?? 1)),
                     normalizesToSkinScale: (definition["normalizeToSkinScale"] as? Bool) ?? false
                 )
@@ -310,7 +277,7 @@ final class PetController: NSObject {
             customSkinName = String(name.prefix(40))
         }
         let sequenceFrameCount = customFrameSequences.values.reduce(0) { $0 + $1.frames.count }
-        FileHandle.standardError.write(Data("Loaded local companion skin: \(customStateImages.count) state poses, \(customFrameSequences.count) frame sequences / \(sequenceFrameCount) frames, interaction=\(customInteractionImage != nil), dragging=\(customDraggingImage != nil), blink=\(customBlinkImage != nil), internalWarp=\(Self.customWarp != nil), normalized alpha bounds, continuous 60 Hz native motion\n".utf8))
+        FileHandle.standardError.write(Data("Loaded local companion skin: \(customStateImages.count) static state poses, \(customFrameSequences.count) event frame sequences / \(sequenceFrameCount) frames, interaction=\(customInteractionImage != nil), dragging=\(customDraggingImage != nil), normalized alpha bounds, clip-driven motion only\n".utf8))
     }
 
     private func visibleAlphaBounds(of source: CGImage) -> CGRect? {
@@ -664,29 +631,12 @@ final class PetController: NSObject {
 
     private func scheduleMicro() {
         microTimer?.invalidate()
-        guard !reducedMotion else { return }
+        guard !reducedMotion, customSkinImage == nil else { return }
         let range = model.idleMicroInterval(activityLevel: activityLevel)
         let delay = Double(model.overlayRemainingMs + Int.random(in: range)) / 1000
         microTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             guard let self = self else { return }
-            if self.customSkinImage != nil {
-                let now = CACurrentMediaTime()
-                if !self.dragging, self.model.baseState == "IDLE",
-                   self.customActionPose == nil, self.customInteractionAt == 0,
-                   self.overlayDeadlineMs.map({ Self.nowMs() >= $0 }) ?? true {
-                    let choices = ["THINKING", "SUCCESS"].filter { $0 != self.lastCustomIdleAction }
-                    if let pose = choices.randomElement(), let sequence = self.customFrameSequences[pose] {
-                        self.lastCustomIdleAction = pose
-                        self.customActionPose = pose
-                        let returnPadding = sequence.exitFrames.isEmpty ? 0.24 : 0
-                        self.customActionUntil = now + Double(sequence.frames.count) * sequence.frameMs / 1000 + returnPadding
-                        let elapsed = max(0, now - self.customSkinShownAt)
-                        self.customFrameSequenceStartedAt[pose] = elapsed
-                        self.customFrameSequencePose = pose
-                        self.contentView?.needsDisplay = true
-                    }
-                }
-            } else if !self.dragging {
+            if !self.dragging {
                 let previousFrame = self.model.frame
                 let previousClip = self.model.activeClipName
                 let index = Int.random(in: 0..<max(1, self.model.idleMicroClips.count))
@@ -973,7 +923,10 @@ final class PetController: NSObject {
             customFrameSequencePose = action.key
         }
         customActionPose = sender.tag == 0 ? nil : action.key
-        customActionUntil = sender.tag == 0 ? 0 : CACurrentMediaTime() + action.duration
+        let clipDuration = customFrameSequences[action.key].map {
+            Double($0.frames.count) * $0.frameMs / 1000 + ($0.exitFrames.isEmpty ? 0.3 : 0)
+        } ?? action.duration
+        customActionUntil = sender.tag == 0 ? 0 : CACurrentMediaTime() + clipDuration
         if sender.tag == 3 {
             customTouchSpring.impulse(velocity: 5.5, at: CACurrentMediaTime())
         }
@@ -1364,36 +1317,15 @@ final class PetController: NSObject {
         return (state, customStateImages[state] ?? idle)
     }
 
-    private func makeCustomBlinkMask() -> CIImage? {
-        if let cached = customBlinkMask { return cached }
-        let width = Int(maxFrameWidth * 2), height = Int(maxFrameHeight * 2)
-        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
-                                      bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
-              let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                                        colors: [CGColor(gray: 1, alpha: 1), CGColor(gray: 1, alpha: 0)] as CFArray,
-                                        locations: [0.65, 1]) else { return nil }
-        // Feather only the two eye areas. All hair, dress and silhouette pixels
-        // remain from the idle pose even if the generated blink varies there.
-        for (x, y) in [(0.442, 0.487), (0.550, 0.507)] {
-            context.saveGState()
-            context.translateBy(x: CGFloat(width) * x, y: CGFloat(height) * y)
-            context.scaleBy(x: CGFloat(width) * 0.050, y: CGFloat(height) * 0.041)
-            context.drawRadialGradient(gradient, startCenter: .zero, startRadius: 0,
-                                       endCenter: .zero, endRadius: 1, options: [])
-            context.restoreGState()
-        }
-        guard let image = context.makeImage() else { return nil }
-        let mask = CIImage(cgImage: image)
-        customBlinkMask = mask
-        return mask
-    }
-
     private func customFrameTexture(for poseKey: String, elapsed: Double) -> CIImage? {
         guard let sequence = customFrameSequences[poseKey], !sequence.frames.isEmpty else { return nil }
         let frames = sequence.frames
         let count = frames.count
-        let framePosition = max(0, elapsed) * 1000 / sequence.frameMs
+        // Reduced Motion freezes ambient loops on their first restful frame,
+        // while event-driven one-shots still run normally when clicked or when
+        // a DSH status event arrives.
+        let playbackElapsed = reducedMotion && sequence.loops ? 0 : max(0, elapsed)
+        let framePosition = playbackElapsed * 1000 / sequence.frameMs
         let frameIndex: Int
         let nextIndex: Int?
         let fraction: Double
@@ -1436,6 +1368,7 @@ final class PetController: NSObject {
         }
 
         guard let current = texture(at: frameIndex) else { return nil }
+        guard sequence.blendsFrames else { return current }
         guard let nextIndex = nextIndex else { return current }
         let t = min(1, max(0, fraction))
         let blend: Double
@@ -1453,8 +1386,7 @@ final class PetController: NSObject {
         ])
     }
 
-    private func customSkinRaster(idle: NSImage, weights: [String: Double], elapsed: Double,
-                                  drag: CGFloat, touch: CGFloat, motion: Bool) -> CGImage? {
+    private func customSkinRaster(idle: NSImage, weights: [String: Double], elapsed: Double) -> CGImage? {
         var combined: CIImage?
         var total: Double = 0
         for (poseKey, weight) in weights.sorted(by: { $0.key < $1.key }) where weight > 0.000001 {
@@ -1477,37 +1409,6 @@ final class PetController: NSObject {
             total += weight
         }
         guard var image = combined else { return nil }
-        let cycle = elapsed.truncatingRemainder(dividingBy: 4.8)
-        let blink: Double
-        if cycle >= 3.1 && cycle < 3.21 { blink = (cycle - 3.1) / 0.11 }
-        else if cycle >= 3.21 && cycle < 3.27 { blink = 1 }
-        else if cycle >= 3.27 && cycle < 3.43 { blink = 1 - (cycle - 3.27) / 0.16 }
-        else { blink = 0 }
-        if motion, blink > 0, let closed = customBlinkImage,
-           let blinkTexture = customTextures[ObjectIdentifier(closed)],
-           let mask = makeCustomBlinkMask() {
-            let openEyeWeight = ["IDLE", "THINKING", "WORKING", "WAITING", "ERROR", "DISCONNECTED"]
-                .reduce(0.0) { $0 + (weights[$1] ?? 0) }
-            let amount = blink * openEyeWeight
-            if amount > 0 {
-                let fadedMask = mask.applyingFilter("CIColorMatrix", parameters: [
-                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: amount),
-                ])
-                image = blinkTexture.applyingFilter("CIBlendWithAlphaMask", parameters: [
-                    kCIInputBackgroundImageKey: image,
-                    kCIInputMaskImageKey: fadedMask,
-                ])
-            }
-        }
-        if motion, let warp = Self.customWarp,
-           let warped = warp.apply(extent: image.extent,
-                                   roiCallback: { _, rect in rect.insetBy(dx: -28, dy: -10) },
-                                   image: image,
-                                   arguments: [elapsed, image.extent.width, image.extent.height, drag, touch,
-                                               (weights["SUCCESS"] ?? 0) + (weights["interaction"] ?? 0),
-                                               weights["WORKING"] ?? 0]) {
-            image = warped
-        }
         // Rasterize at the current window's retina density instead of always
         // processing the full source image at its generated resolution.
         let resolution = min(1.4, max(0.55, scale))
@@ -1530,7 +1431,12 @@ final class PetController: NSObject {
             || key.hasPrefix("INTERACTION_")
             || customPoseMixer.targetPose == "dragging"
         let weights: [String: Double]
-        if motion {
+        if customFrameSequences[key]?.loops == false {
+            // A complete one-shot clip carries its own entrance and recovery.
+            // Cross-fading whole character frames would create visible ghosts.
+            customPoseMixer.reset(to: key, at: now)
+            weights = [key: 1]
+        } else if motion {
             weights = customPoseMixer.update(requested: key, at: now, immediate: immediate)
         } else {
             customPoseMixer.reset(to: key, at: now)
@@ -1545,18 +1451,7 @@ final class PetController: NSObject {
             customFrameSequencePose = requested.key
             customFrameSequenceStartedAt[requested.key] = elapsed
         }
-        let progress = motion ? min(1, elapsed / 0.7) : 1
-        let entry = 1 - pow(1 - progress, 3)
-        // A single phase runs throughout all poses and transitions.
-        let phase = elapsed * 1.7
-        let idleWeight = CGFloat(weights["IDLE"] ?? 0)
-        let breathing = motion ? CGFloat(sin(elapsed * 2.15)) : 0
-        let bob = motion ? CGFloat(sin(elapsed * 1.78 + 0.38)) * (1.1 + idleWeight * 1.0) : 0
-        let sway = motion ? CGFloat(sin(elapsed * 1.16)) * (0.004 + idleWeight * 0.003) : 0
-        let breathScale = breathing * (0.003 + idleWeight * 0.003)
-        let entryScale = CGFloat(0.96 + entry * 0.04)
-        guard let raster = customSkinRaster(idle: idle, weights: weights, elapsed: elapsed,
-                                           drag: drag, touch: touch, motion: motion) else { return }
+        guard let raster = customSkinRaster(idle: idle, weights: weights, elapsed: elapsed) else { return }
 
         NSGraphicsContext.saveGraphicsState()
         guard let context = NSGraphicsContext.current?.cgContext else {
@@ -1564,18 +1459,12 @@ final class PetController: NSObject {
             return
         }
         context.saveGState()
-        context.translateBy(x: rect.midX + CGFloat(sin(phase * 0.72)) * 0.75 * scale,
-                            y: rect.midY + bob * scale + CGFloat(1 - entry) * 10 * scale - drag * 5 * scale - touch * 2 * scale)
-        context.scaleBy(x: scale * entryScale * (1 + breathScale * 0.5),
-                        y: -scale * entryScale * (1 + breathScale))
-        // Breathe and sway around the shared foot anchor; the damped spring
-        // remains responsible for touch and drag recovery.
+        context.translateBy(x: rect.midX, y: rect.midY - drag * 5 * scale - touch * 2 * scale)
+        context.scaleBy(x: scale * (1 - touch * 0.007), y: -scale * (1 + touch * 0.01))
         let footY = -maxFrameHeight * 0.46
         context.translateBy(x: 0, y: footY)
-        context.rotate(by: sway + drag * (0.012 + CGFloat(sin(phase * 1.8)) * 0.012))
-        context.scaleBy(x: 1 - touch * 0.007, y: 1 + touch * 0.01)
+        context.rotate(by: drag * 0.012)
         context.translateBy(x: 0, y: -footY)
-        context.setAlpha(CGFloat(entry))
 
         context.interpolationQuality = .high
         context.draw(raster, in: CGRect(x: -maxFrameWidth / 2, y: -maxFrameHeight / 2,
