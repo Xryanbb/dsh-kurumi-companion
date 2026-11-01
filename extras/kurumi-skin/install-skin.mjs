@@ -1,0 +1,132 @@
+#!/usr/bin/env node
+// Local selector for QCYTSN/dsh-dafeiyu's optional custom macOS skin support.
+// Does not build the helper, stop DSH, or access any credentials.
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const args = process.argv.slice(2)
+if (args.some((arg) => arg !== '--dry-run')) {
+  throw new Error('Usage: node install-skin.mjs [--dry-run]')
+}
+const skinRoot = dirname(fileURLToPath(import.meta.url))
+const source = join(skinRoot, 'images')
+const idleFrameSource = join(skinRoot, 'animations', 'idle')
+const happyFrameSource = join(skinRoot, 'animations', 'happy')
+const thinkingFrameSource = join(skinRoot, 'animations', 'thinking')
+const workingFrameSource = join(skinRoot, 'animations', 'working')
+const headPatFrameSource = join(skinRoot, 'animations', 'head_pat')
+const pokeFrameSource = join(skinRoot, 'animations', 'poke')
+const hairRibbonFrameSource = join(skinRoot, 'animations', 'hair_ribbon')
+const dshHome = resolve(process.env.DSH_HOME || join(homedir(), '.dsh'))
+const directory = join(dshHome, 'dsh-dafeiyu')
+const target = join(directory, 'skins', 'kurumi-animated-v2')
+const idleFrameTarget = join(target, 'animations', 'idle-v1')
+const happyFrameTarget = join(target, 'animations', 'happy-wave-v1')
+const thinkingFrameTarget = join(target, 'animations', 'thinking-v1')
+const workingFrameTarget = join(target, 'animations', 'working-v1')
+const headPatFrameTarget = join(target, 'animations', 'head-pat-v1')
+const pokeFrameTarget = join(target, 'animations', 'poke-v1')
+const hairRibbonFrameTarget = join(target, 'animations', 'hair-ribbon-v1')
+const selectionPath = join(directory, 'skin.json')
+const names = ['idle', 'idle-blink', 'thought', 'working', 'happy', 'dragging']
+const images = Object.fromEntries(names.map((name) => [name, join(target, `${name}.png`)]))
+const idleFrameNames = ['frame-001.png', 'frame-002.png', 'frame-003.png', 'frame-004.png', 'frame-005.png', 'frame-006.png', 'frame-007.png']
+const idleFrameSources = idleFrameNames.map((name) => join(idleFrameSource, name))
+const idleFramePaths = idleFrameNames.map((name) => join(idleFrameTarget, name))
+const happyFrameNames = Array.from({ length: 9 }, (_, index) => `frame-${String(index + 1).padStart(3, '0')}.png`)
+const happyFrameSources = happyFrameNames.map((name) => join(happyFrameSource, name))
+const happyFramePaths = happyFrameNames.map((name) => join(happyFrameTarget, name))
+const thinkingFrameNames = happyFrameNames
+const thinkingFrameSources = thinkingFrameNames.map((name) => join(thinkingFrameSource, name))
+const thinkingFramePaths = thinkingFrameNames.map((name) => join(thinkingFrameTarget, name))
+const workingFrameNames = happyFrameNames
+const workingFrameSources = workingFrameNames.map((name) => join(workingFrameSource, name))
+const workingFramePaths = workingFrameNames.map((name) => join(workingFrameTarget, name))
+const headPatFrameNames = happyFrameNames
+const headPatFrameSources = headPatFrameNames.map((name) => join(headPatFrameSource, name))
+const headPatFramePaths = headPatFrameNames.map((name) => join(headPatFrameTarget, name))
+const pokeFrameNames = Array.from({ length: 8 }, (_, index) => `frame-${String(index + 1).padStart(3, '0')}.png`)
+const pokeFrameSources = pokeFrameNames.map((name) => join(pokeFrameSource, name))
+const pokeFramePaths = pokeFrameNames.map((name) => join(pokeFrameTarget, name))
+const hairRibbonFrameNames = happyFrameNames
+const hairRibbonFrameSources = hairRibbonFrameNames.map((name) => join(hairRibbonFrameSource, name))
+const hairRibbonFramePaths = hairRibbonFrameNames.map((name) => join(hairRibbonFrameTarget, name))
+
+// Validate all inputs before creating any user-directory files.
+for (const path of [
+  ...names.map((name) => join(source, `${name}.png`)),
+  ...idleFrameSources, ...happyFrameSources, ...thinkingFrameSources, ...workingFrameSources,
+  ...headPatFrameSources, ...pokeFrameSources, ...hairRibbonFrameSources,
+]) {
+  const bytes = readFileSync(path)
+  if (bytes.length < 8 || !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+    throw new Error(`Invalid PNG: ${path}`)
+  }
+}
+const selection = {
+  imagePath: images.idle,
+  name: '时崎狂三',
+  states: {
+    IDLE: images.idle,
+    THINKING: images.thought,
+    WORKING: images.working,
+    SUCCESS: images.happy,
+    WAITING: images.thought,
+    ERROR: images.thought,
+  },
+  interactionImagePath: images.happy,
+  draggingImagePath: images.dragging,
+  blinkImagePath: images['idle-blink'],
+  frameSequences: {
+    IDLE: { frames: idleFramePaths, frameMs: 550, loop: true },
+    THINKING: { frames: thinkingFramePaths, frameMs: 420, loop: true },
+    WAITING: { frames: thinkingFramePaths, frameMs: 420, loop: true },
+    WORKING: { frames: workingFramePaths, frameMs: 360, loop: true },
+    SUCCESS: { frames: happyFramePaths, frameMs: 260, loop: false },
+    INTERACTION_HEAD_PAT: { frames: headPatFramePaths, frameMs: 120, loop: false },
+    INTERACTION_POKE: { frames: pokeFramePaths, frameMs: 120, loop: false },
+    INTERACTION_HAIR_RIBBON: { frames: hairRibbonFramePaths, frameMs: 120, loop: false },
+  },
+}
+if (args.includes('--dry-run')) {
+  console.log(JSON.stringify({ dryRun: true, selectionPath, imageDirectory: target, selection }, null, 2))
+} else {
+  mkdirSync(target, { recursive: true, mode: 0o700 })
+  for (const name of names) {
+    const temporary = `${images[name]}.tmp-${process.pid}`
+    copyFileSync(join(source, `${name}.png`), temporary)
+    renameSync(temporary, images[name])
+  }
+  mkdirSync(idleFrameTarget, { recursive: true, mode: 0o700 })
+  for (let index = 0; index < idleFrameNames.length; index += 1) {
+    const temporary = `${idleFramePaths[index]}.tmp-${process.pid}`
+    copyFileSync(idleFrameSources[index], temporary)
+    renameSync(temporary, idleFramePaths[index])
+  }
+  for (const sequence of [
+    { target: happyFrameTarget, names: happyFrameNames, sources: happyFrameSources, paths: happyFramePaths },
+    { target: thinkingFrameTarget, names: thinkingFrameNames, sources: thinkingFrameSources, paths: thinkingFramePaths },
+    { target: workingFrameTarget, names: workingFrameNames, sources: workingFrameSources, paths: workingFramePaths },
+    { target: headPatFrameTarget, names: headPatFrameNames, sources: headPatFrameSources, paths: headPatFramePaths },
+    { target: pokeFrameTarget, names: pokeFrameNames, sources: pokeFrameSources, paths: pokeFramePaths },
+    { target: hairRibbonFrameTarget, names: hairRibbonFrameNames, sources: hairRibbonFrameSources, paths: hairRibbonFramePaths },
+  ]) {
+    mkdirSync(sequence.target, { recursive: true, mode: 0o700 })
+    for (let index = 0; index < sequence.names.length; index += 1) {
+      const temporary = `${sequence.paths[index]}.tmp-${process.pid}`
+      copyFileSync(sequence.sources[index], temporary)
+      renameSync(temporary, sequence.paths[index])
+    }
+  }
+  if (existsSync(selectionPath)) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    copyFileSync(selectionPath, `${selectionPath}.backup-${stamp}`)
+  }
+  const temporary = `${selectionPath}.tmp-${process.pid}`
+  writeFileSync(temporary, JSON.stringify(selection, null, 2) + '\n', { mode: 0o600 })
+  renameSync(temporary, selectionPath)
+  console.log(`Kurumi skin selected: ${selectionPath}`)
+  console.log('Restart the DSH Host with this branch’s custom-skin macOS Helper to apply it.')
+}

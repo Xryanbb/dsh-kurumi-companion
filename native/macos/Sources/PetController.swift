@@ -1,0 +1,1825 @@
+import AppKit
+import CoreImage
+import QuartzCore
+import UserNotifications
+
+/// Native AppKit companion controller. Implements the full BigFish feature set
+/// on Apple's official APIs:
+/// - Borderless transparent NSPanel, `fullScreenAuxiliary` + `canJoinAllSpaces`
+///   + `.floating` level, re-asserted every 2 s so the pet stays above
+///   full-screen apps.
+/// - Faithful port of the Qt helper's status card, multi-task card, animation
+///   model, drag/click interactions, right-click menu,
+///   idle micro-animations and layout persistence.
+/// - Apple official permission handling (UserNotifications + Accessibility).
+
+/// Borderless overlay panel that may live anywhere in the global display space.
+/// AppKit's default `constrainFrameRect` keeps a window inside the screen of the
+/// Space it currently belongs to, which pins the pet to the display edge while
+/// the user drags it toward another display (with "Displays have separate
+/// Spaces"). The pet is a free-floating overlay: its own `moveToPet` clamps it
+/// when the position is restored, so the AppKit constraint only gets in the way.
+final class PetPanel: NSPanel {
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
+    }
+}
+
+final class PetController: NSObject {
+    private struct CustomSkinFrameSequence {
+        let frames: [String]
+        let frameMs: Double
+        let loops: Bool
+    }
+
+    static let labels: [String: String] = [
+        "IDLE": "休息中",
+        "THINKING": "思考中",
+        "WORKING": "干活中",
+        "WAITING": "等你呢",
+        "SUCCESS": "完成啦",
+        "ERROR": "出问题了",
+        "DISCONNECTED": "已断开",
+    ]
+
+    static let statusColors: [String: (bg: String, fg: String)] = [
+        "SUCCESS": ("#D9F7E4", "#12B85A"),
+        "ERROR": ("#FDE3E3", "#E5484D"),
+        "WAITING": ("#FFF0CE", "#D88A00"),
+        "THINKING": ("#E2ECFF", "#4C78E8"),
+        "WORKING": ("#DDEBFF", "#3478F6"),
+        "DISCONNECTED": ("#ECEEF1", "#7B818A"),
+    ]
+
+    static let persistentStates: Set<String> = ["THINKING", "WORKING", "WAITING", "ERROR"]
+
+    let model: AnimationModel
+    let manifest: [String: Any]
+    let assetRoot: URL
+    let layoutURL: URL
+    var webuiURL: String
+    var openLabel = ProcessInfo.processInfo.environment["DSH_DAFEIYU_OPEN_LABEL"] ?? "打开 DSH"
+    var balanceSummary = ""
+    let eventLogURL: URL?
+    let snapshotURL: URL?
+
+    /// Keeps the pet above full-screen apps and on every Space.
+    /// `.canJoinAllSpaces` is dropped only while the user drags: with "Displays
+    /// have separate Spaces" a joined window cannot follow the pointer to
+    /// another display's Space, so the panel visibly sticks at the display edge
+    /// until the drag ends. `.moveToActiveSpace` lets it ride the pointer across
+    /// displays during the drag; `endDrag` restores the pinned behavior.
+    private static let pinnedCollectionBehavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+    private static let draggingCollectionBehavior: NSWindow.CollectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+
+    private var frameData: [String: Data] = [:]
+    private let imageCache = NSCache<NSString, NSImage>()
+    /// Decoded frames are held only in this bounded cache: a 24 fps set is
+    /// thousands of frames and each decoded one costs about 0.55 MB.
+    private static let decodedFrameCache = 24
+    private var maxFrameWidth: CGFloat = 238
+    private var maxFrameHeight: CGFloat = 260
+    /// Optional local poses use lightweight native motion. Once an idle image
+    /// is loaded, missing poses always fall back to that image.
+    private var customSkinImage: NSImage?
+    private var customSkin3D = false
+    private var sceneView: Kurumi3DView?
+    private var customStateImages: [String: NSImage] = [:]
+    private var customInteractionImage: NSImage?
+    private var customDraggingImage: NSImage?
+    private var customBlinkImage: NSImage?
+    private var customFrameSequences: [String: CustomSkinFrameSequence] = [:]
+    private var customFrameSequencePose: String?
+    private var customFrameSequenceStartedAt: [String: Double] = [:]
+    private var customSkinName = "自定义桌宠"
+    private var customSkinShownAt: CFTimeInterval = 0
+    private var customInteractionAt: CFTimeInterval = 0
+    private var customInteractionPose: String?
+    private var customActionPose: String?
+    private var customActionUntil: CFTimeInterval = 0
+    private var lastCustomIdleAction: String?
+    private var customPoseMixer = SkinPoseMixer()
+    private var customDragSpring = DampedSkinSpring(frequency: 2.8, dampingRatio: 0.66)
+    private var customTouchSpring = DampedSkinSpring(frequency: 3.6, dampingRatio: 0.62)
+    private var customTextures: [ObjectIdentifier: CIImage] = [:]
+    private let customFrameTextureCache = NSCache<NSString, CIImage>()
+    private var customBlinkMask: CIImage?
+    private let customRenderContext = CIContext(options: [.cacheIntermediates: false])
+    private lazy var customSoftwareContext = CIContext(options: [.useSoftwareRenderer: true, .cacheIntermediates: false])
+    private var customRenderFallbackLogged = false
+    private static let customWarp = CIWarpKernel(source: """
+        kernel vec2 companionMotion(float time, float width, float height, float drag, float touch, float greeting, float reading) {
+            vec2 p = destCoord();
+            vec2 uv = p / vec2(width, height);
+            float unit = width / 412.0;
+            float hairY = smoothstep(0.10, 0.26, uv.y) * (1.0 - smoothstep(0.70, 0.86, uv.y));
+            float left = (1.0 - smoothstep(0.25, 0.40, uv.x)) * hairY;
+            float right = smoothstep(0.60, 0.75, uv.x) * hairY;
+            float head = (1.0 - smoothstep(0.12, 0.25, abs(uv.x - 0.5)))
+                * smoothstep(0.39, 0.58, uv.y) * (1.0 - smoothstep(0.83, 0.96, uv.y));
+            float body = (1.0 - smoothstep(0.13, 0.29, abs(uv.x - 0.5)))
+                * smoothstep(0.12, 0.26, uv.y) * (1.0 - smoothstep(0.42, 0.55, uv.y));
+            float amplitude = 3.6 + drag * 4.2 + touch * 2.0;
+            float dx = left * sin(time * 1.50 + uv.y * 3.0) * amplitude
+                + right * sin(time * 1.37 + uv.y * 3.3 + 1.25) * amplitude * 0.87
+                + head * sin(time * 0.91) * 2.2 - body * sin(time * 0.91 + 0.2) * 0.9;
+            float dy = left * sin(time * 1.23 + uv.y * 2.0 + 0.6) * 0.9
+                + right * sin(time * 1.31 + uv.y * 2.6 + 1.8) * 0.85
+                + head * sin(time * 1.7) * 0.85 + body * sin(time * 1.7) * 0.45;
+            float hand = 1.0 - smoothstep(0.55, 1.0, length((uv - vec2(0.345, 0.47)) / vec2(0.074, 0.096)));
+            vec2 elbow = vec2(width * 0.397, height * 0.408);
+            vec2 arm = p - elbow;
+            float wave = sin(time * 6.0) * 0.14 * greeting * hand;
+            vec2 handMotion = vec2(-arm.y, arm.x) * wave;
+            float book = (1.0 - smoothstep(0.11, 0.20, abs(uv.x - 0.5)))
+                * smoothstep(0.24, 0.31, uv.y) * (1.0 - smoothstep(0.42, 0.48, uv.y));
+            dy += reading * book * sin(time * 3.2 + 0.6) * 0.9;
+            return p - vec2(dx, dy) * unit - handMotion;
+        }
+        """)
+
+    private(set) var panel: NSPanel?
+    private(set) var contentView: PetView?
+
+    var scale: Double
+    var bubbleScale: Double
+    var reducedMotion: Bool
+    var activityLevel: String
+    var soundEnabled: Bool
+    var bubbleMode: String
+    var bubbleStates: [String]
+
+    // Durable status
+    var displayState = "IDLE"
+    var statusState = "IDLE"
+    var statusMessage = "我在这儿等新任务哦"
+    var statusDetail = "DSH · 等待下一次任务"
+    var statusDeadlineMs: Int?
+    var overlayState: String?
+    var overlayMessage = ""
+    var overlayDetail = ""
+    var overlayDeadlineMs: Int?
+    var task = ""
+    var tasks: [[String: Any]] = []
+
+    // Geometry (pet anchor in AppKit bottom-left coordinates)
+    private var petX: CGFloat = 0
+    private var petY: CGFloat = 0
+
+    private(set) var dragging = false
+
+    private var animTimer: Timer?
+    private var keepFrontTimer: Timer?
+    private var microTimer: Timer?
+    private var clickThroughTimer: Timer?
+    /// A native menu runs its own tracking loop; keep the panel interactive
+    /// until it closes so the timer cannot steal the selection click.
+    private var menuOpen = false
+    private var lastTickMs: Int
+    private var dragPetOffsetX: CGFloat = 0
+    private var dragPetOffsetY: CGFloat = 8
+    private var fadeFromFrame: String?
+    private var fadeStarted: CFTimeInterval = 0
+    private var fadeDuration: Double = 0.15
+    private var snapshotSaved = false
+    private var quitting = false
+
+    init(model: AnimationModel,
+         manifest: [String: Any],
+         assetRoot: URL,
+         layoutURL: URL,
+         webuiURL: String,
+         eventLogURL: URL?,
+         snapshotURL: URL?) {
+        self.model = model
+        self.manifest = manifest
+        self.assetRoot = assetRoot
+        self.layoutURL = layoutURL
+        self.webuiURL = webuiURL
+        self.eventLogURL = eventLogURL
+        self.snapshotURL = snapshotURL
+
+        let env = ProcessInfo.processInfo.environment
+        let layout = PetLayout.load(from: layoutURL)
+        if let raw = env["DSH_DAFEIYU_SCALE"], let value = Double(raw) {
+            self.scale = Self.clampedScale(value)
+        } else {
+            self.scale = Self.clampedScale(layout.scale)
+        }
+        if let raw = env["DSH_DAFEIYU_BUBBLE_SCALE"], let value = Double(raw) {
+            self.bubbleScale = Self.clampedBubbleScale(value)
+        } else {
+            self.bubbleScale = Self.clampedBubbleScale(layout.bubbleScale)
+        }
+        if let raw = env["DSH_DAFEIYU_REDUCED_MOTION"] {
+            self.reducedMotion = raw == "1"
+        } else {
+            self.reducedMotion = layout.reducedMotion
+        }
+        self.activityLevel = env["DSH_DAFEIYU_ACTIVITY_LEVEL"] ?? "normal"
+        self.soundEnabled = env["DSH_DAFEIYU_SOUND_ENABLED"] != "0"
+        let configuredBubbleMode = env["DSH_DAFEIYU_BUBBLE_MODE"]
+        self.bubbleMode = ["always", "hidden", "custom"].contains(configuredBubbleMode ?? "")
+            ? configuredBubbleMode!
+            : layout.bubbleMode
+        self.bubbleStates = env["DSH_DAFEIYU_BUBBLE_STATES"]
+            .map { $0.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) } }
+            ?? layout.bubbleStates
+        self.lastTickMs = Self.nowMs()
+        super.init()
+
+        if let mfw = manifest["maxFrameWidth"] as? Int { maxFrameWidth = CGFloat(mfw) }
+        if let mfh = manifest["maxFrameHeight"] as? Int { maxFrameHeight = CGFloat(mfh) }
+        loadCustomSkin(environment: env)
+        loadFrames()
+        if !isHeadless() {
+            buildWindow()
+            restorePosition()
+            startTimers()
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(screenParametersChanged),
+                name: NSApplication.didChangeScreenParametersNotification,
+                object: nil
+            )
+        }
+    }
+
+    private func isHeadless() -> Bool {
+        ProcessInfo.processInfo.arguments.contains("--headless")
+    }
+
+    // MARK: - Frames & geometry
+
+    private func loadCustomSkin(environment: [String: String]) {
+        let selectionURL = layoutURL.deletingLastPathComponent().appendingPathComponent("skin.json")
+        let selection: [String: Any]
+        if let data = try? Data(contentsOf: selectionURL),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            selection = json
+        } else {
+            selection = [:]
+        }
+        guard let image = loadSkinImage(at: environment["DSH_DAFEIYU_SKIN_IMAGE"] ?? selection["imagePath"] as? String) else { return }
+        customSkinImage = image
+        customSkin3D = selection["renderer"] as? String == "scene3d"
+        if let states = selection["states"] as? [String: String] {
+            for (state, path) in states where Self.labels[state] != nil {
+                customStateImages[state] = loadSkinImage(at: path)
+            }
+        }
+        customInteractionImage = loadSkinImage(at: selection["interactionImagePath"] as? String)
+        customDraggingImage = loadSkinImage(at: selection["draggingImagePath"] as? String)
+        customBlinkImage = loadSkinImage(at: selection["blinkImagePath"] as? String)
+        if let sequences = selection["frameSequences"] as? [String: Any] {
+            for (state, value) in sequences where Self.labels[state] != nil || state.hasPrefix("INTERACTION_") {
+                guard let definition = value as? [String: Any],
+                      let frames = definition["frames"] as? [String],
+                      !frames.isEmpty, frames.count <= 3_600,
+                      frames.allSatisfy({ $0.hasPrefix("/") }) else { continue }
+                let requestedFrameMs = (definition["frameMs"] as? NSNumber)?.doubleValue ?? 180
+                customFrameSequences[state] = CustomSkinFrameSequence(
+                    frames: frames,
+                    frameMs: min(10_000, max(10, requestedFrameMs)),
+                    loops: (definition["loop"] as? Bool) ?? false
+                )
+            }
+        }
+        customFrameTextureCache.countLimit = Self.decodedFrameCache
+        customFrameTextureCache.totalCostLimit = 32 * 1024 * 1024
+        if let name = environment["DSH_DAFEIYU_SKIN_NAME"] ?? selection["name"] as? String,
+           !name.isEmpty {
+            customSkinName = String(name.prefix(40))
+        }
+        let sequenceFrameCount = customFrameSequences.values.reduce(0) { $0 + $1.frames.count }
+        FileHandle.standardError.write(Data("Loaded local companion skin: \(customStateImages.count) state poses, \(customFrameSequences.count) frame sequences / \(sequenceFrameCount) frames, interaction=\(customInteractionImage != nil), dragging=\(customDraggingImage != nil), blink=\(customBlinkImage != nil), internalWarp=\(Self.customWarp != nil), normalized alpha bounds, continuous 60 Hz native motion\n".utf8))
+    }
+
+    private func loadSkinImage(at path: String?, cacheTexture: Bool = true) -> NSImage? {
+        guard let path = path, path.hasPrefix("/"),
+              let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let fileSize = attributes[.size] as? NSNumber,
+              fileSize.intValue > 0, fileSize.intValue <= 16 * 1024 * 1024,
+              let image = NSImage(contentsOfFile: path), image.isValid,
+              image.size.width > 0, image.size.height > 0 else { return nil }
+        guard let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              source.width <= 8192, source.height <= 8192,
+              source.width * source.height <= 24_000_000 else { return nil }
+        let width = source.width
+        let height = source.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let alphaBounds: CGRect? = pixels.withUnsafeMutableBytes { bytes in
+            let rgba = bytes.bindMemory(to: UInt8.self)
+            guard let context = CGContext(data: bytes.baseAddress, width: width, height: height,
+                                          bitsPerComponent: 8, bytesPerRow: width * 4,
+                                          space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue) else { return nil }
+            context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+            var minX = width, minY = height, maxX = -1, maxY = -1
+            for y in 0..<height {
+                for x in 0..<width where rgba[(y * width + x) * 4 + 3] >= 24 {
+                    minX = min(minX, x); minY = min(minY, y)
+                    maxX = max(maxX, x); maxY = max(maxY, y)
+                }
+            }
+            guard maxX >= minX, maxY >= minY else { return nil }
+            // Keep two source pixels beyond the threshold to retain soft edges.
+            return CGRect(x: max(0, minX - 2), y: max(0, minY - 2),
+                          width: min(width - 1, maxX + 2) - max(0, minX - 2) + 1,
+                          height: min(height - 1, maxY + 2) - max(0, minY - 2) + 1)
+        }
+        guard let bounds = alphaBounds, let cropped = source.cropping(to: bounds) else { return nil }
+        // Normalize actual visible content, rather than each file's padding.
+        // Every pose has the same visual height and foot baseline at 96%.
+        let canvas = CGSize(width: maxFrameWidth, height: maxFrameHeight)
+        let rasterScale: CGFloat = 2
+        guard let normalized = CGContext(data: nil, width: Int(canvas.width * rasterScale),
+                                          height: Int(canvas.height * rasterScale), bitsPerComponent: 8,
+                                          bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        normalized.scaleBy(x: rasterScale, y: rasterScale)
+        normalized.interpolationQuality = .high
+        let fit = min(canvas.height * 0.77 / bounds.height, canvas.width * 0.78 / bounds.width)
+        let visual = CGSize(width: bounds.width * fit, height: bounds.height * fit)
+        normalized.draw(cropped, in: CGRect(x: (canvas.width - visual.width) / 2,
+                                            y: canvas.height * 0.04,
+                                            width: visual.width, height: visual.height))
+        guard let raster = normalized.makeImage() else { return nil }
+        let result = NSImage(cgImage: raster, size: canvas)
+        if cacheTexture {
+            customTextures[ObjectIdentifier(result)] = CIImage(cgImage: raster)
+        }
+        return result
+    }
+
+    private func loadFrames() {
+        guard customSkinImage == nil else { return }
+        for clip in model.clips.values {
+            for frame in clip.frames where frameData[frame] == nil {
+                frameData[frame] = try? Data(contentsOf: assetRoot.appendingPathComponent(frame))
+            }
+        }
+        imageCache.totalCostLimit = Self.decodedFrameCache * decodedFrameBytes
+    }
+
+    private var decodedFrameBytes: Int { Int(maxFrameWidth * maxFrameHeight * 4) }
+
+    private func frameImage(for frame: String) -> NSImage? {
+        if let image = customSkinImage { return image }
+        let key = frame as NSString
+        if let cached = imageCache.object(forKey: key) { return cached }
+        guard let data = frameData[frame], let image = NSImage(data: data) else { return nil }
+        imageCache.setObject(image, forKey: key, cost: decodedFrameBytes)
+        return image
+    }
+
+    private var petWidth: CGFloat { maxFrameWidth * scale }
+    private var petHeight: CGFloat { maxFrameHeight * scale }
+
+    private var cardHeightPoints: CGFloat {
+        let footer: CGFloat = balanceSummary.isEmpty ? 0 : 28
+        if tasks.count >= 2 {
+            let rows = min(tasks.count, 3)
+            return (58 + CGFloat(rows) * 26 + footer) * bubbleScale
+        }
+        return (84 + footer) * bubbleScale
+    }
+
+    private var cardWidthPoints: CGFloat { 420 * bubbleScale }
+
+    private func windowSize() -> NSSize {
+        // A hidden card must not keep the window as wide as a 420pt card:
+        // at scale 0.55 that left roughly 385pt of mostly transparent window
+        // around a ~219pt character (issue #92).
+        let showsCard = bubbleMode != "hidden"
+        return NSSize(
+            width: showsCard ? max(petWidth + 50, cardWidthPoints + 28) : petWidth + 50,
+            height: petHeight + (showsCard ? cardHeightPoints + 34 : 26)
+        )
+    }
+
+    func petRect() -> NSRect {
+        let viewSize = contentView?.bounds.size ?? windowSize()
+        let offsetX = min(max(petX - (panel?.frame.origin.x ?? 0), 0), viewSize.width - petWidth)
+        return NSRect(x: offsetX, y: viewSize.height - petHeight - 8, width: petWidth, height: petHeight)
+    }
+
+    func bubbleRect() -> NSRect {
+        let viewSize = contentView?.bounds.size ?? windowSize()
+        let cardWidth = cardWidthPoints
+        let cardHeight = cardHeightPoints
+        let petCenterX = petRect().midX
+        let margin: CGFloat = 14
+        let minX = margin
+        let maxX = max(minX, viewSize.width - cardWidth - margin)
+        let cardX = min(max(petCenterX - cardWidth / 2, minX), maxX)
+        return NSRect(x: cardX, y: 7, width: cardWidth, height: cardHeight)
+    }
+
+    private func screenContaining(_ point: NSPoint) -> NSScreen? {
+        NSScreen.screens.first { $0.frame.contains(point) }
+    }
+
+    func moveToPet(_ x: CGFloat, _ y: CGFloat) {
+        guard let panel = panel else { return }
+        let size = windowSize()
+        let geometry = screenContaining(NSPoint(x: x + petWidth / 2, y: y + petHeight / 2))?.visibleFrame
+            ?? panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+            ?? NSRect(origin: .zero, size: size)
+        let position = PetGeometry.clamp(NSPoint(x: x, y: y), petSize: NSSize(width: petWidth, height: petHeight), screen: geometry)
+        let minX = geometry.minX - (size.width - petWidth * 0.35)
+        let maxX = geometry.maxX - petWidth * 0.35
+        let centerOffsetX = (size.width - petWidth) / 2
+        let windowX = min(max(position.x - centerOffsetX, minX), maxX)
+        let offsetX = min(max(position.x - windowX, 0), size.width - petWidth)
+        self.petX = windowX + offsetX
+
+        let windowY = position.y - 8
+        self.petY = windowY + 8
+
+        panel.setFrameOrigin(NSPoint(x: windowX, y: windowY))
+        updateClickThrough()
+        contentView?.needsDisplay = true
+    }
+
+    private func restorePosition() {
+        let layout = PetLayout.load(from: layoutURL)
+        let screenHeight = NSScreen.main?.frame.height ?? 982
+        if let px = layout.petX, let py = layout.petY {
+            let ax = CGFloat(px)
+            var ay = CGFloat(py)
+            if layout.coordinateSpace == nil && ay < screenHeight * 0.5 {
+                // Legacy Qt layout stores top-left coordinates; convert to
+                // AppKit bottom-left before first use.
+                ay = screenHeight - (ay + petHeight)
+            }
+            moveToPet(ax, ay)
+        } else {
+            let geometry = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1512, height: 982)
+            moveToPet(geometry.maxX - petWidth - 24, geometry.minY + 24)
+        }
+        saveLayout()
+    }
+
+    func saveLayout() {
+        guard let panel = panel else { return }
+        let origin = panel.frame.origin
+        var layout = PetLayout()
+        layout.x = Int(origin.x.rounded())
+        layout.y = Int(origin.y.rounded())
+        layout.petX = Int(petX.rounded())
+        layout.petY = Int(petY.rounded())
+        layout.scale = scale
+        layout.bubbleScale = bubbleScale
+        layout.reducedMotion = reducedMotion
+        layout.bubbleMode = bubbleMode
+        layout.bubbleStates = bubbleStates
+        layout.save(to: layoutURL)
+    }
+
+    func resizeAndReposition() {
+        guard let panel = panel, let contentView = contentView else { return }
+        let size = windowSize()
+        let origin = panel.frame.origin
+        panel.setContentSize(size)
+        panel.setFrameOrigin(origin)
+        contentView.frame = NSRect(origin: .zero, size: size)
+        moveToPet(petX, petY)
+        update3D()
+        contentView.needsDisplay = true
+    }
+
+    // MARK: - Window
+
+    private func buildWindow() {
+        let size = windowSize()
+        let panel = PetPanel(
+            contentRect: NSRect(x: 100, y: 100, width: size.width, height: size.height),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.level = .floating
+        panel.collectionBehavior = Self.pinnedCollectionBehavior
+        panel.hidesOnDeactivate = false
+        panel.ignoresMouseEvents = false
+        panel.isMovableByWindowBackground = false
+        panel.title = customSkinImage == nil ? "DSH 大肥鱼" : "DSH \(customSkinName)"
+
+        let view = PetView(frame: NSRect(x: 0, y: 0, width: size.width, height: size.height))
+        view.controller = self
+        panel.contentView = view
+        self.panel = panel
+        self.contentView = view
+    }
+
+    func show() {
+        guard !isHeadless() else { return }
+        customSkinShownAt = CACurrentMediaTime()
+        customDragSpring = DampedSkinSpring(time: customSkinShownAt, frequency: 2.8, dampingRatio: 0.66)
+        customTouchSpring = DampedSkinSpring(time: customSkinShownAt, frequency: 3.6, dampingRatio: 0.62)
+        panel?.orderFrontRegardless()
+        keepFront()
+        updateClickThrough()
+    }
+
+    @objc private func screenParametersChanged() {
+        moveToPet(petX, petY)
+    }
+
+    // MARK: - Timers
+
+    private var animationInterval: TimeInterval {
+        if reducedMotion { return 0.04 }
+        if customSkin3D { return 1.0 / 30.0 }
+        if customSkinImage != nil { return 1.0 / 60.0 }
+        // Sub-frame poll: a once-per-frame timer turns one early delivery into a whole-frame hitch.
+        return min(0.02, max(0.008, Double(model.activeClip.frameMs) / 3000))
+    }
+
+    private func startAnimTimer() {
+        animTimer?.invalidate()
+        animTimer = Timer.scheduledTimer(withTimeInterval: animationInterval, repeats: true) { [weak self] _ in
+            self?.tick()
+        }
+    }
+
+    private func startTimers() {
+        startAnimTimer()
+        keepFrontTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            self?.keepFront()
+        }
+        // 30 Hz is enough to hand a click to the application below without
+        // making the user wait; it only compares a point against two rects.
+        clickThroughTimer = Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { [weak self] _ in
+            self?.updateClickThrough()
+        }
+        updateClickThrough()
+        scheduleMicro()
+    }
+
+    /// AppKit routes a click to this panel before it ever reaches the view
+    /// hierarchy, so `hitTest` alone cannot pass a click to the app below.
+    /// Toggle `ignoresMouseEvents` instead, based on the real pointer position
+    /// (issue #92). Drags and the context menu keep the panel interactive.
+    private func updateClickThrough() {
+        guard let panel = panel, let contentView = contentView else { return }
+        guard !quitting, panel.isVisible, !dragging, !menuOpen else {
+            setClickThrough(false)
+            return
+        }
+        // Never flip the window between mouse-down and mouse-up: a click that
+        // started on the app below must not lose its mouse-up to this panel.
+        guard NSEvent.pressedMouseButtons == 0 else { return }
+        let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
+        let viewPoint = contentView.convert(windowPoint, from: nil)
+        let bubble = bubbleVisible() ? bubbleRect() : nil
+        setClickThrough(!PetGeometry.isInteractive(viewPoint, pet: petRect(), bubble: bubble))
+    }
+
+    private func setClickThrough(_ enabled: Bool) {
+        guard let panel = panel, panel.ignoresMouseEvents != enabled else { return }
+        panel.ignoresMouseEvents = enabled
+    }
+
+    private func keepFront() {
+        guard let panel = panel, !quitting else { return }
+        // Re-assert every 2 s: other apps or full-screen transitions can reset
+        // the level/collection behavior, which would hide the pet.
+        panel.level = .floating
+        // Do not re-join all Spaces mid-drag; that would yank the panel back to
+        // its starting Space while the pointer is on another display.
+        if !dragging {
+            panel.collectionBehavior = Self.pinnedCollectionBehavior
+        }
+        panel.orderFrontRegardless()
+    }
+
+    private func scheduleMicro() {
+        microTimer?.invalidate()
+        guard !reducedMotion else { return }
+        let range = model.idleMicroInterval(activityLevel: activityLevel)
+        let delay = Double(model.overlayRemainingMs + Int.random(in: range)) / 1000
+        microTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            guard let self = self else { return }
+            if self.customSkinImage != nil {
+                let now = CACurrentMediaTime()
+                if !self.dragging, self.model.baseState == "IDLE",
+                   self.customActionPose == nil, self.customInteractionAt == 0,
+                   self.overlayDeadlineMs.map({ Self.nowMs() >= $0 }) ?? true {
+                    let choices = ["THINKING", "SUCCESS"].filter { $0 != self.lastCustomIdleAction }
+                    if let pose = choices.randomElement(), let sequence = self.customFrameSequences[pose] {
+                        self.lastCustomIdleAction = pose
+                        self.customActionPose = pose
+                        self.customActionUntil = now + Double(sequence.frames.count) * sequence.frameMs / 1000 + 0.24
+                        let elapsed = max(0, now - self.customSkinShownAt)
+                        self.customFrameSequenceStartedAt[pose] = elapsed
+                        self.customFrameSequencePose = pose
+                        self.contentView?.needsDisplay = true
+                    }
+                }
+            } else if !self.dragging {
+                let previousFrame = self.model.frame
+                let previousClip = self.model.activeClipName
+                let index = Int.random(in: 0..<max(1, self.model.idleMicroClips.count))
+                _ = self.model.playIdleMicro(index: index)
+                self.syncFrameTransition(previousFrame: previousFrame, previousClip: previousClip)
+                self.contentView?.needsDisplay = true
+            }
+            self.scheduleMicro()
+        }
+    }
+
+    private func tick() {
+        let now = Self.nowMs()
+        let elapsed = max(0, now - lastTickMs)
+        lastTickMs = now
+        let hadPulse = model.pulseState != nil
+        let previousFrame = model.frame
+        let previousClip = model.activeClipName
+        let modelElapsed = reducedMotion ? 0 : elapsed
+        model.advance(elapsedMs: modelElapsed, nowMs: now)
+        syncFrameTransition(previousFrame: previousFrame, previousClip: previousClip)
+        if hadPulse && model.pulseState == nil {
+            displayState = model.baseState
+        }
+        if let deadline = overlayDeadlineMs, now >= deadline {
+            clearOverlay()
+        }
+        if animTimer?.timeInterval != animationInterval {
+            startAnimTimer()
+        }
+        update3D()
+        contentView?.needsDisplay = true
+    }
+
+    private func syncFrameTransition(previousFrame: String, previousClip: String) {
+        guard customSkinImage == nil else { return }
+        let currentFrame = model.frame
+        guard currentFrame != previousFrame else { return }
+        guard previousClip != model.activeClipName else { return }
+        if let duration = AnimationModel.crossfadeDuration(previousClip: previousClip, currentClip: model.activeClipName) {
+            fadeFromFrame = previousFrame
+            fadeStarted = CACurrentMediaTime()
+            fadeDuration = duration
+        } else {
+            fadeFromFrame = nil
+        }
+    }
+
+    // MARK: - Interaction
+
+    func beginDrag() {
+        guard !dragging else { return }
+        customActionPose = nil
+        customActionUntil = 0
+        customInteractionAt = 0
+        customInteractionPose = nil
+        dragging = true
+        // Let the panel follow the pointer onto another display's Space while the
+        // drag lasts; a `canJoinAllSpaces` panel would stick at the display edge.
+        panel?.collectionBehavior = Self.draggingCollectionBehavior
+        // The drag must keep receiving mouseDragged even when the pointer
+        // leaves the character rectangle.
+        setClickThrough(false)
+        fadeFromFrame = nil
+        // Remember where the pet sits inside the window when the drag starts.
+        // During the drag the window moves directly; without re-anchoring the
+        // pet it would slide inside the window at the same rate and stay
+        // frozen on screen while the bubble moves — a visible desync.
+        let rect = petRect()
+        dragPetOffsetX = rect.minX
+        dragPetOffsetY = rect.minY
+        microTimer?.invalidate()
+        // `dragging` is a dangling loop: keep it advancing while the pointer
+        // moves the window, otherwise the pet sits on its first frame and looks
+        // frozen. Reduced motion keeps the previous frozen behaviour.
+        guard model.playOverlay("dragging") else {
+            animTimer?.invalidate()
+            contentView?.needsDisplay = true
+            return
+        }
+        if reducedMotion || !model.activeClip.loop {
+            animTimer?.invalidate()
+        } else {
+            restartAnimTimer()
+        }
+        contentView?.needsDisplay = true
+    }
+
+    func updateDrag() {
+        guard let panel = panel else { return }
+        let viewSize = contentView?.bounds.size ?? windowSize()
+        // Re-anchor the pet to the window's current origin using the offsets
+        // captured at drag start, so the character and the bubble move as one.
+        petX = panel.frame.origin.x + dragPetOffsetX
+        petY = panel.frame.origin.y + (viewSize.height - dragPetOffsetY - petHeight)
+        contentView?.needsDisplay = true
+    }
+
+    func endDrag() {
+        guard dragging else { return }
+        let now = Self.nowMs()
+        model.advance(elapsedMs: 0, nowMs: now)
+        if reducedMotion || !model.playOverlay("dragging_release") { model.clearOverlay() }
+        fadeFromFrame = nil
+        dragging = false
+        // Back to every Space / above full-screen apps once the pointer is released.
+        panel?.collectionBehavior = Self.pinnedCollectionBehavior
+        lastTickMs = now
+        startAnimTimer()
+        if !reducedMotion {
+            scheduleMicro()
+        }
+        saveLayout()
+        updateClickThrough()
+        contentView?.needsDisplay = true
+    }
+
+    func handleClick(at point: NSPoint, clickCount: Int, presentationTime: CFTimeInterval = CACurrentMediaTime()) {
+        if clickCount >= 2 {
+            playInteraction("head_pat", message: "好啦好啦，知道你喜欢我~", at: presentationTime)
+            return
+        }
+        let rect = petRect()
+        let relativeX = max(0, point.x - rect.minX)
+        let relativeY = max(0, point.y - rect.minY)
+        if relativeY < rect.height * 0.45 {
+            playInteraction("head_pat", message: "摸摸也不能让我少干活哦~", at: presentationTime)
+        } else if relativeX > rect.width * 0.72 {
+            if customSkinImage == nil {
+                playInteraction("tail", message: "尾巴不是进度条啦！", at: presentationTime)
+            } else {
+                playInteraction("hair_ribbon", message: "碰我的发带吗？我帮你整理一下~", at: presentationTime)
+            }
+        } else {
+            playInteraction("poke", message: "戳我干嘛，任务还在跑呢", at: presentationTime)
+        }
+        contentView?.needsDisplay = true
+    }
+
+    private func playInteraction(_ clipName: String, message: String, at presentationTime: CFTimeInterval = CACurrentMediaTime()) {
+        let previousFrame = model.frame
+        let previousClip = model.activeClipName
+        let modelClipName = clipName == "hair_ribbon" ? "head_pat" : clipName
+        guard reducedMotion || model.playInteraction(modelClipName, nowMs: Self.nowMs()) else { return }
+        let rigAction = clipName == "hair_ribbon" ? "turn" : clipName == "poke" ? "nod" : "wave"
+        sceneView?.rig.interact(rigAction, at: presentationTime)
+        if customSkinImage != nil {
+            customActionPose = nil
+            customActionUntil = 0
+            customInteractionAt = presentationTime
+            let poseKey: String?
+            switch clipName {
+            case "head_pat": poseKey = "INTERACTION_HEAD_PAT"
+            case "poke": poseKey = "INTERACTION_POKE"
+            case "hair_ribbon": poseKey = "INTERACTION_HAIR_RIBBON"
+            default: poseKey = nil
+            }
+            customInteractionPose = poseKey.flatMap { customFrameSequences[$0] == nil ? nil : $0 }
+            if let pose = customInteractionPose {
+                let elapsed = max(0, presentationTime - customSkinShownAt)
+                customFrameSequenceStartedAt[pose] = elapsed
+                customFrameSequencePose = pose
+            }
+            customTouchSpring.impulse(velocity: 9, at: customInteractionAt)
+        }
+        syncFrameTransition(previousFrame: previousFrame, previousClip: previousClip)
+        showOverlay(message, statusDetail, statusState, 1800)
+        scheduleMicro()
+        contentView?.needsDisplay = true
+    }
+
+    func showMenu(with event: NSEvent) {
+        guard let contentView = contentView else { return }
+        let menu = NSMenu(title: customSkinImage == nil ? "DSH 大肥鱼" : "DSH \(customSkinName)")
+        if customSkinImage != nil {
+            let mode = NSMenuItem(title: "3D 立体模式", action: #selector(toggle3D(_:)), keyEquivalent: "")
+            mode.target = self; mode.state = customSkin3D ? .on : .off; menu.addItem(mode)
+            if customSkin3D {
+                for (label, tag) in [("转身看看", 0), ("原地走步", 1), ("招招手", 2), ("点点头", 3)] {
+                    let item = NSMenuItem(title: label, action: #selector(perform3DAction(_:)), keyEquivalent: "")
+                    item.target = self; item.tag = tag; menu.addItem(item)
+                }
+            } else {
+                let actions = NSMenu(title: "动作")
+                for (label, tag) in [("回到当前状态", 0), ("想一想", 1), ("翻书工作", 2), ("开心招手", 3),
+                                     ("摸头回应", 4), ("戳一下", 5), ("整理发带", 6)] {
+                    let item = NSMenuItem(title: label, action: #selector(performCustomAction(_:)), keyEquivalent: "")
+                    item.target = self; item.tag = tag; actions.addItem(item)
+                }
+                let actionItem = NSMenuItem(title: "动作", action: nil, keyEquivalent: "")
+                actionItem.submenu = actions
+                menu.addItem(actionItem)
+            }
+            menu.addItem(.separator())
+        }
+
+        let sizeMenu = NSMenu(title: "大小")
+        for (label, value) in [("迷你", 0.6), ("小", 0.8), ("标准", 1.0), ("大", 1.25)] {
+            let item = NSMenuItem(title: label, action: #selector(changeSize(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = Int(value * 100)
+            item.state = abs(scale - value) < 0.05 ? .on : .off
+            sizeMenu.addItem(item)
+        }
+        let sizeItem = NSMenuItem(title: "大小", action: nil, keyEquivalent: "")
+        sizeItem.submenu = sizeMenu
+        menu.addItem(sizeItem)
+
+        let bubbleMenu = NSMenu(title: "气泡大小")
+        for (label, value) in [("小", 0.8), ("标准", 1.0), ("大", 1.2)] {
+            let item = NSMenuItem(title: label, action: #selector(changeBubbleScale(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = Int(value * 100)
+            item.state = abs(bubbleScale - value) < 0.05 ? .on : .off
+            bubbleMenu.addItem(item)
+        }
+        let bubbleItem = NSMenuItem(title: "气泡大小", action: nil, keyEquivalent: "")
+        bubbleItem.submenu = bubbleMenu
+        menu.addItem(bubbleItem)
+
+        let reduced = NSMenuItem(title: "减少动态", action: #selector(toggleReducedMotion(_:)), keyEquivalent: "")
+        reduced.target = self
+        reduced.state = reducedMotion ? .on : .off
+        menu.addItem(reduced)
+
+        let openWeb = NSMenuItem(title: openLabel, action: #selector(openWebUI(_:)), keyEquivalent: "")
+        openWeb.target = self
+        menu.addItem(openWeb)
+
+        let accessibility = NSMenuItem(title: "辅助功能权限…", action: #selector(accessibilityPermission(_:)), keyEquivalent: "")
+        accessibility.target = self
+        menu.addItem(accessibility)
+
+        menu.addItem(.separator())
+
+        let hide = NSMenuItem(title: "本次隐藏", action: #selector(hidePet(_:)), keyEquivalent: "")
+        hide.target = self
+        menu.addItem(hide)
+
+        let quit = NSMenuItem(title: "本次关闭", action: #selector(quitFromMenu(_:)), keyEquivalent: "")
+        quit.target = self
+        menu.addItem(quit)
+
+        menuOpen = true
+        defer {
+            menuOpen = false
+            updateClickThrough()
+        }
+        NSMenu.popUpContextMenu(menu, with: event, for: contentView)
+    }
+
+    @objc private func toggle3D(_ sender: NSMenuItem) {
+        customSkin3D.toggle()
+        let selectionURL = layoutURL.deletingLastPathComponent().appendingPathComponent("skin.json")
+        if let data = try? Data(contentsOf: selectionURL),
+           var config = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            config["renderer"] = customSkin3D ? "scene3d" : "sprite"
+            if let next = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted,.sortedKeys]) { try? next.write(to: selectionURL, options: .atomic) }
+        }
+        update3D(); restartAnimTimer(); contentView?.needsDisplay = true
+    }
+
+    @objc private func perform3DAction(_ sender: NSMenuItem) {
+        sceneView?.rig.interact(sender.tag == 0 ? "turn" : sender.tag == 1 ? "walk" : sender.tag == 3 ? "nod" : "wave", at: CACurrentMediaTime())
+    }
+
+    @objc private func performCustomAction(_ sender: NSMenuItem) {
+        let poses: [(key: String, duration: CFTimeInterval, message: String)] = [
+            ("IDLE", 0, "回到当前状态"),
+            ("THINKING", 3.8, "让我想一想……"),
+            ("WORKING", 4.2, "狂三开始翻书工作啦"),
+            ("SUCCESS", 2.8, "做得不错呢，给你一个招手~"),
+            ("INTERACTION_HEAD_PAT", 1.45, "舒服地眯一下眼睛~"),
+            ("INTERACTION_POKE", 1.32, "哎呀，突然戳我做什么~"),
+            ("INTERACTION_HAIR_RIBBON", 1.45, "让我把发带整理好~"),
+        ]
+        guard poses.indices.contains(sender.tag), !customSkin3D else { return }
+        let action = poses[sender.tag]
+        customInteractionAt = 0
+        customInteractionPose = nil
+        if sender.tag != 0, customFrameSequences[action.key] != nil {
+            let now = CACurrentMediaTime()
+            customFrameSequenceStartedAt[action.key] = max(0, now - customSkinShownAt)
+            customFrameSequencePose = action.key
+        }
+        customActionPose = sender.tag == 0 ? nil : action.key
+        customActionUntil = sender.tag == 0 ? 0 : CACurrentMediaTime() + action.duration
+        if sender.tag == 3 {
+            customTouchSpring.impulse(velocity: 5.5, at: CACurrentMediaTime())
+        }
+        showOverlay(action.message, statusDetail, statusState, 1800)
+        contentView?.needsDisplay = true
+    }
+
+    private func update3D() {
+        guard let view = contentView else { return }
+        if !customSkin3D { sceneView?.removeFromSuperview(); sceneView = nil; return }
+        if sceneView == nil { let scene = Kurumi3DView(frame: petRect()); view.addSubview(scene); sceneView = scene }
+        sceneView?.frame = petRect()
+        sceneView?.rig.update(time: CACurrentMediaTime(), state: displayState, dragging: dragging,
+            reduced: reducedMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+    }
+
+    @objc private func changeSize(_ sender: NSMenuItem) {
+        scale = Self.clampedScale(Double(sender.tag) / 100.0)
+        resizeAndReposition()
+        saveLayout()
+        reportSettings(["scale": scale])
+    }
+
+    @objc private func changeBubbleScale(_ sender: NSMenuItem) {
+        bubbleScale = Self.clampedBubbleScale(Double(sender.tag) / 100.0)
+        resizeAndReposition()
+        saveLayout()
+        reportSettings(["bubbleScale": bubbleScale])
+    }
+
+    private func setReducedMotion(_ enabled: Bool) {
+        reducedMotion = enabled
+        restartAnimTimer()
+        if enabled {
+            microTimer?.invalidate()
+            if !dragging { model.clearOverlay() }
+            fadeFromFrame = nil
+        } else {
+            scheduleMicro()
+        }
+    }
+
+    @objc private func toggleReducedMotion(_ sender: NSMenuItem) {
+        setReducedMotion(sender.state == .off)
+        saveLayout()
+        reportSettings(["reducedMotion": reducedMotion])
+        contentView?.needsDisplay = true
+    }
+
+    @objc private func openWebUI(_ sender: Any?) {
+        if let url = URL(string: webuiURL), NSWorkspace.shared.open(url) {
+            return
+        }
+        FileHandle.standardError.write(Data("Unable to open the configured DSH client\n".utf8))
+        showOverlay("无法打开 DSH", "请确认 DSH 已安装、打开地址设置正确", "ERROR", 4000)
+        contentView?.needsDisplay = true
+    }
+
+    @objc private func accessibilityPermission(_ sender: Any?) {
+        Permissions.requestAccessibility()
+    }
+
+    @objc private func hidePet(_ sender: Any?) {
+        panel?.orderOut(nil)
+    }
+
+    @objc private func quitFromMenu(_ sender: Any?) {
+        quit(reason: "user")
+    }
+
+    // MARK: - Protocol
+
+    func apply(_ message: [String: Any]) {
+        logEvent(message)
+        let previousFrame = model.frame
+        let previousClip = model.activeClipName
+        let previousState = model.baseState
+        guard let kind = message["kind"] as? String else { return }
+        switch kind {
+        case "shutdown":
+            quit(reason: "host")
+        case "state":
+            handleState(message)
+        case "pulse":
+            handlePulse(message)
+        case "task":
+            handleTask(message)
+        case "tasks":
+            tasks = (message["tasks"] as? [[String: Any]]) ?? []
+            resizeAndReposition()
+            contentView?.needsDisplay = true
+        case "config":
+            applyConfig(message)
+        case "balance":
+            balanceSummary = String((message["summary"] as? String ?? "").prefix(200))
+            resizeAndReposition()
+            contentView?.needsDisplay = true
+        default:
+            break
+        }
+        syncFrameTransition(previousFrame: previousFrame, previousClip: previousClip)
+        if previousState != model.baseState { scheduleMicro() }
+        maybeSaveSnapshot()
+    }
+
+    private func handleState(_ message: [String: Any]) {
+        let state = Self.stringValue(message["state"]) ?? "IDLE"
+        let activity = Self.stringValue(message["activity"])
+        if customSkinImage != nil {
+            customInteractionAt = 0
+            customInteractionPose = nil
+            customActionPose = nil
+            customActionUntil = 0
+        }
+        displayState = state
+        model.applyState(state, activity: activity)
+        displayState = model.pulseState ?? state
+        if model.pulseState == nil { clearOverlay() }
+        showStatus(
+            Self.stringValue(message["message"]) ?? Self.labels[state] ?? state,
+            Self.stringValue(message["detail"]) ?? "",
+            state,
+            Self.persistentStates.contains(state) ? nil : 4200
+        )
+        contentView?.needsDisplay = true
+    }
+
+    private func handlePulse(_ message: [String: Any]) {
+        let state = Self.stringValue(message["state"]) ?? "IDLE"
+        if customSkinImage != nil {
+            customInteractionAt = 0
+            customInteractionPose = nil
+            customActionPose = nil
+            customActionUntil = 0
+        }
+        var ttl = max(250, Self.intValue(message["ttlMs"]) ?? 1800)
+        let resumeState = Self.stringValue(message["resumeState"]) ?? model.baseState
+        let resumeActivity = Self.stringValue(message["resumeActivity"])
+        model.applyPulse(
+            state: state,
+            ttlMs: ttl,
+            nowMs: Self.nowMs(),
+            resumeState: resumeState,
+            resumeActivity: resumeActivity,
+            completeClip: !reducedMotion
+        )
+        ttl = max(250, (model.pulseDeadlineMs ?? Self.nowMs()) - Self.nowMs())
+        showStatus(
+            Self.stringValue(message["resumeMessage"]) ?? Self.labels[resumeState] ?? resumeState,
+            Self.stringValue(message["resumeDetail"]) ?? "",
+            resumeState,
+            Self.persistentStates.contains(resumeState) ? nil : ttl + 2200
+        )
+        showOverlay(
+            Self.stringValue(message["message"]) ?? Self.labels[state] ?? state,
+            Self.stringValue(message["detail"]) ?? "",
+            state,
+            ttl
+        )
+        if state == "SUCCESS" || state == "ERROR" {
+            notifyAlert(state)
+        }
+        contentView?.needsDisplay = true
+    }
+
+    private func handleTask(_ message: [String: Any]) {
+        task = Self.stringValue(message["task"]) ?? ""
+        showStatus(
+            Self.stringValue(message["message"]) ?? task,
+            Self.stringValue(message["detail"]) ?? "",
+            model.baseState,
+            Self.persistentStates.contains(model.baseState) ? nil : 6000
+        )
+        contentView?.needsDisplay = true
+    }
+
+    private func applyConfig(_ message: [String: Any]) {
+        if let url = message["openUrl"] as? String { webuiURL = url }
+        if let label = message["openLabel"] as? String { openLabel = label }
+        var changed = false
+        if let value = Self.doubleValue(message["scale"]), value != scale {
+            scale = Self.clampedScale(value)
+            changed = true
+        }
+        if let value = Self.doubleValue(message["bubbleScale"]), value != bubbleScale {
+            bubbleScale = Self.clampedBubbleScale(value)
+            changed = true
+        }
+        if let value = message["reducedMotion"] as? Bool, value != reducedMotion {
+            setReducedMotion(value)
+            changed = true
+        }
+        if let value = message["soundEnabled"] as? Bool {
+            soundEnabled = value
+        }
+        if let value = message["activityLevel"] as? String, ["quiet", "normal", "lively"].contains(value) {
+            activityLevel = value
+            if !reducedMotion {
+                scheduleMicro()
+            }
+        }
+        if let value = message["bubbleMode"] as? String, ["always", "hidden", "custom"].contains(value) {
+            bubbleMode = value
+            changed = true
+        }
+        if let value = message["bubbleStates"] as? [String] {
+            bubbleStates = value
+            changed = true
+        }
+        if changed {
+            resizeAndReposition()
+            saveLayout()
+        }
+    }
+
+    func quit(reason: String, reportClosed: Bool = true) {
+        guard !quitting else { return }
+        quitting = true
+        saveLayout()
+        animTimer?.invalidate()
+        keepFrontTimer?.invalidate()
+        microTimer?.invalidate()
+        clickThroughTimer?.invalidate()
+        if reportClosed {
+            ProtocolIO.shared.write([
+                "protocolVersion": 1,
+                "kind": "closed",
+                "reason": reason,
+                "timestamp": Self.nowMs(),
+            ])
+        }
+        panel?.close()
+        NSApp.terminate(nil)
+    }
+
+    // MARK: - Status helpers
+
+    private func showStatus(_ message: String, _ detail: String, _ state: String, _ ttlMs: Int?) {
+        statusMessage = message
+        statusDetail = detail
+        statusState = state
+        statusDeadlineMs = ttlMs.map { Self.nowMs() + $0 }
+    }
+
+    private func showOverlay(_ message: String, _ detail: String, _ state: String, _ ttlMs: Int) {
+        overlayMessage = message
+        overlayDetail = detail.isEmpty ? statusDetail : detail
+        overlayState = state
+        overlayDeadlineMs = Self.nowMs() + ttlMs
+    }
+
+    private func clearOverlay() {
+        overlayMessage = ""
+        overlayDetail = ""
+        overlayState = nil
+        overlayDeadlineMs = nil
+    }
+
+    func currentCard() -> (title: String, detail: String, state: String)? {
+        let now = Self.nowMs()
+        if !overlayMessage.isEmpty, overlayDeadlineMs == nil || now < overlayDeadlineMs! {
+            return (overlayMessage, overlayDetail, overlayState ?? statusState)
+        }
+        if !statusMessage.isEmpty, statusDeadlineMs == nil || now < statusDeadlineMs! {
+            return (statusMessage, statusDetail, statusState)
+        }
+        return nil
+    }
+
+    private func bubbleVisible() -> Bool {
+        if bubbleMode == "hidden" { return false }
+        if bubbleMode == "always" { return true }
+        if tasks.count >= 2 {
+            return tasks.contains { task in
+                guard let state = task["state"] as? String else { return false }
+                return bubbleStates.contains(state)
+            }
+        }
+        return bubbleStates.contains(overlayState ?? statusState)
+    }
+
+    private func notifyAlert(_ state: String) {
+        if soundEnabled {
+            let filename = state == "SUCCESS" ? "success" : "error"
+            if let url = Bundle.main.resourceURL?
+                .appendingPathComponent("assets/sounds/\(filename).wav"),
+               let sound = NSSound(contentsOf: url, byReference: true) {
+                sound.play()
+            }
+        }
+        Permissions.requestNotificationAuthorizationIfNeeded()
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let content = UNMutableNotificationContent()
+        content.title = state == "SUCCESS" ? "任务完成" : "任务出错"
+        content.body = state == "SUCCESS" ? "DSH 任务已完成" : "DSH 任务遇到问题"
+        content.sound = soundEnabled ? .default : nil
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                FileHandle.standardError.write(Data("Notification error: \(error)\n".utf8))
+            }
+        }
+    }
+
+    private func restartAnimTimer() {
+        lastTickMs = Self.nowMs()
+        startAnimTimer()
+    }
+
+    // MARK: - Drawing
+
+    func drawPet(in view: NSView, at presentationTime: CFTimeInterval = CACurrentMediaTime()) {
+        if customSkin3D { return }
+        guard let image = frameImage(for: model.frame) else { return }
+        if customSkinImage != nil {
+            drawCustomSkin(image, at: presentationTime)
+            return
+        }
+        var fadeAlpha: CGFloat = 1
+        var fadeImage: NSImage?
+        if let fromFrame = fadeFromFrame, let fromImage = frameImage(for: fromFrame) {
+            let elapsed = CACurrentMediaTime() - fadeStarted
+            if elapsed < fadeDuration {
+                fadeAlpha = min(1, pow(CGFloat(elapsed / fadeDuration), 0.7))
+                fadeImage = fromImage
+            } else {
+                fadeFromFrame = nil
+            }
+        }
+
+        let pet = petRect()
+        let drawWidth = pet.width
+        let drawHeight = pet.height
+        let x = pet.minX
+        let y = pet.minY
+        let centerX = x + drawWidth / 2
+        let centerY = y + drawHeight / 2
+
+        func draw(_ img: NSImage, alpha: CGFloat) {
+            NSGraphicsContext.saveGraphicsState()
+            guard let ctx = NSGraphicsContext.current?.cgContext else {
+                NSGraphicsContext.restoreGraphicsState()
+                return
+            }
+            ctx.saveGState()
+            ctx.translateBy(x: centerX, y: centerY)
+            // The content view is flipped (top-left origin). NSImage drawing
+            // does not compensate for a flipped context, which would render
+            // the pet vertically mirrored. Mirror about the image's own
+            // center so it draws right-side up while staying in place.
+            ctx.scaleBy(x: 1, y: -1)
+            img.draw(
+                in: NSRect(x: -drawWidth / 2, y: -drawHeight / 2, width: drawWidth, height: drawHeight),
+                from: NSRect(origin: .zero, size: img.size),
+                operation: .sourceOver,
+                fraction: alpha
+            )
+            ctx.restoreGState()
+            NSGraphicsContext.restoreGraphicsState()
+        }
+
+        if fadeAlpha < 1, let fadeImage = fadeImage {
+            draw(fadeImage, alpha: 1)
+        }
+        draw(image, alpha: fadeAlpha)
+    }
+
+    private func customSkinPose(idle: NSImage, now: CFTimeInterval) -> (key: String, image: NSImage) {
+        if dragging {
+            return ("dragging", customDraggingImage ?? idle)
+        }
+        if customInteractionAt > 0 {
+            let pose = customInteractionPose ?? "interaction"
+            let duration = customFrameSequences[pose].map { Double($0.frames.count) * $0.frameMs / 1000 } ?? 1.5
+            if now - customInteractionAt < duration + 0.3 {
+                return (pose, customInteractionImage ?? idle)
+            }
+            customInteractionAt = 0
+            customInteractionPose = nil
+        }
+        if let action = customActionPose, now < customActionUntil {
+            return (action, customStateImages[action] ?? idle)
+        }
+        customActionPose = nil
+        let state = overlayState ?? displayState
+        return (state, customStateImages[state] ?? idle)
+    }
+
+    private func makeCustomBlinkMask() -> CIImage? {
+        if let cached = customBlinkMask { return cached }
+        let width = Int(maxFrameWidth * 2), height = Int(maxFrameHeight * 2)
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                        colors: [CGColor(gray: 1, alpha: 1), CGColor(gray: 1, alpha: 0)] as CFArray,
+                                        locations: [0.65, 1]) else { return nil }
+        // Feather only the two eye areas. All hair, dress and silhouette pixels
+        // remain from the idle pose even if the generated blink varies there.
+        for (x, y) in [(0.442, 0.487), (0.550, 0.507)] {
+            context.saveGState()
+            context.translateBy(x: CGFloat(width) * x, y: CGFloat(height) * y)
+            context.scaleBy(x: CGFloat(width) * 0.050, y: CGFloat(height) * 0.041)
+            context.drawRadialGradient(gradient, startCenter: .zero, startRadius: 0,
+                                       endCenter: .zero, endRadius: 1, options: [])
+            context.restoreGState()
+        }
+        guard let image = context.makeImage() else { return nil }
+        let mask = CIImage(cgImage: image)
+        customBlinkMask = mask
+        return mask
+    }
+
+    private func customFrameTexture(for poseKey: String, elapsed: Double) -> CIImage? {
+        guard let sequence = customFrameSequences[poseKey], !sequence.frames.isEmpty else { return nil }
+        let count = sequence.frames.count
+        let framePosition = max(0, elapsed) * 1000 / sequence.frameMs
+        let position: Double
+        if sequence.loops {
+            position = framePosition.truncatingRemainder(dividingBy: Double(count))
+        } else {
+            position = min(framePosition, Double(count - 1))
+        }
+        let frameIndex = Int(floor(position))
+        let fraction = position - Double(frameIndex)
+
+        func texture(at index: Int) -> CIImage? {
+            let path = sequence.frames[index]
+            let key = path as NSString
+            if let cached = customFrameTextureCache.object(forKey: key) { return cached }
+            guard let image = loadSkinImage(at: path, cacheTexture: false),
+                  let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+            let texture = CIImage(cgImage: cgImage)
+            customFrameTextureCache.setObject(texture, forKey: key, cost: Int(maxFrameWidth * maxFrameHeight * 16))
+            return texture
+        }
+
+        guard let current = texture(at: frameIndex) else { return nil }
+        let nextIndex: Int
+        if frameIndex + 1 < count {
+            nextIndex = frameIndex + 1
+        } else if sequence.loops {
+            nextIndex = 0
+        } else {
+            return current
+        }
+        let blend = min(1, max(0, (fraction - 0.72) / 0.28))
+        guard blend > 0, let next = texture(at: nextIndex) else { return current }
+        return current.applyingFilter("CIDissolveTransition", parameters: [
+            kCIInputTargetImageKey: next,
+            kCIInputTimeKey: blend,
+        ])
+    }
+
+    private func customSkinRaster(idle: NSImage, weights: [String: Double], elapsed: Double,
+                                  drag: CGFloat, touch: CGFloat, motion: Bool) -> CGImage? {
+        var combined: CIImage?
+        var total: Double = 0
+        for (poseKey, weight) in weights.sorted(by: { $0.key < $1.key }) where weight > 0.000001 {
+            let image: NSImage
+            switch poseKey {
+            case "dragging": image = customDraggingImage ?? idle
+            case "interaction": image = customInteractionImage ?? idle
+            case let key where key.hasPrefix("INTERACTION_"): image = customInteractionImage ?? idle
+            default: image = customStateImages[poseKey] ?? idle
+            }
+            let sequenceElapsed = max(0, elapsed - customFrameSequenceStartedAt[poseKey, default: 0])
+            guard let texture = customFrameTexture(for: poseKey, elapsed: sequenceElapsed)
+                    ?? customTextures[ObjectIdentifier(image)] else { continue }
+            if let accumulated = combined {
+                combined = accumulated.applyingFilter("CIDissolveTransition", parameters: [
+                    kCIInputTargetImageKey: texture,
+                    kCIInputTimeKey: weight / (total + weight),
+                ])
+            } else { combined = texture }
+            total += weight
+        }
+        guard var image = combined else { return nil }
+        let cycle = elapsed.truncatingRemainder(dividingBy: 4.8)
+        let blink: Double
+        if cycle >= 3.1 && cycle < 3.21 { blink = (cycle - 3.1) / 0.11 }
+        else if cycle >= 3.21 && cycle < 3.27 { blink = 1 }
+        else if cycle >= 3.27 && cycle < 3.43 { blink = 1 - (cycle - 3.27) / 0.16 }
+        else { blink = 0 }
+        if motion, blink > 0, let closed = customBlinkImage,
+           let blinkTexture = customTextures[ObjectIdentifier(closed)],
+           let mask = makeCustomBlinkMask() {
+            let openEyeWeight = ["IDLE", "THINKING", "WORKING", "WAITING", "ERROR", "DISCONNECTED"]
+                .reduce(0.0) { $0 + (weights[$1] ?? 0) }
+            let amount = blink * openEyeWeight
+            if amount > 0 {
+                let fadedMask = mask.applyingFilter("CIColorMatrix", parameters: [
+                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: amount),
+                ])
+                image = blinkTexture.applyingFilter("CIBlendWithAlphaMask", parameters: [
+                    kCIInputBackgroundImageKey: image,
+                    kCIInputMaskImageKey: fadedMask,
+                ])
+            }
+        }
+        if motion, let warp = Self.customWarp,
+           let warped = warp.apply(extent: image.extent,
+                                   roiCallback: { _, rect in rect.insetBy(dx: -28, dy: -10) },
+                                   image: image,
+                                   arguments: [elapsed, image.extent.width, image.extent.height, drag, touch,
+                                               (weights["SUCCESS"] ?? 0) + (weights["interaction"] ?? 0),
+                                               weights["WORKING"] ?? 0]) {
+            image = warped
+        }
+        // Rasterize at the current window's retina density instead of always
+        // processing the full source image at its generated resolution.
+        let resolution = min(1.4, max(0.55, scale))
+        image = image.transformed(by: CGAffineTransform(scaleX: resolution, y: resolution))
+        if let rendered = customRenderContext.createCGImage(image, from: image.extent) { return rendered }
+        if !customRenderFallbackLogged {
+            customRenderFallbackLogged = true
+            FileHandle.standardError.write(Data("Companion GPU rendering unavailable; trying software Core Image. If unavailable, normalized artwork stays visible without internal deformation.\n".utf8))
+        }
+        if let rendered = customSoftwareContext.createCGImage(image, from: image.extent) { return rendered }
+        return idle.cgImage(forProposedRect: nil, context: nil, hints: nil)
+    }
+
+    private func drawCustomSkin(_ idle: NSImage, at now: CFTimeInterval) {
+        let rect = petRect()
+        let motion = !reducedMotion && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let requested = customSkinPose(idle: idle, now: now)
+        let key = requested.image === idle ? "IDLE" : requested.key
+        let immediate = ["dragging", "interaction", "ERROR", "WAITING", "SUCCESS"].contains(key)
+            || key.hasPrefix("INTERACTION_")
+            || customPoseMixer.targetPose == "dragging"
+        let weights: [String: Double]
+        if motion {
+            weights = customPoseMixer.update(requested: key, at: now, immediate: immediate)
+        } else {
+            customPoseMixer.reset(to: key, at: now)
+            weights = [key: 1]
+        }
+        customDragSpring.retarget(motion && dragging ? 1 : 0, at: now)
+        customTouchSpring.advance(to: now)
+        let drag = motion ? CGFloat(customDragSpring.position) : 0
+        let touch = motion ? CGFloat(customTouchSpring.position) : 0
+        let elapsed = max(0, now - customSkinShownAt)
+        if requested.key != customFrameSequencePose {
+            customFrameSequencePose = requested.key
+            customFrameSequenceStartedAt[requested.key] = elapsed
+        }
+        let progress = motion ? min(1, elapsed / 0.7) : 1
+        let entry = 1 - pow(1 - progress, 3)
+        // A single phase runs throughout all poses and transitions.
+        let phase = elapsed * 1.7
+        let entryScale = CGFloat(0.96 + entry * 0.04)
+        guard let raster = customSkinRaster(idle: idle, weights: weights, elapsed: elapsed,
+                                           drag: drag, touch: touch, motion: motion) else { return }
+
+        NSGraphicsContext.saveGraphicsState()
+        guard let context = NSGraphicsContext.current?.cgContext else {
+            NSGraphicsContext.restoreGraphicsState()
+            return
+        }
+        context.saveGState()
+        context.translateBy(x: rect.midX,
+                            y: rect.midY + CGFloat(1 - entry) * 10 * scale - drag * 5 * scale - touch * 2 * scale)
+        context.scaleBy(x: scale * entryScale, y: -scale * entryScale)
+        // Rotate and breathe around the shared foot anchor, not the canvas
+        // center. The exact damped spring settles smoothly after release.
+        let footY = -maxFrameHeight * 0.46
+        context.translateBy(x: 0, y: footY)
+        context.rotate(by: drag * (0.012 + CGFloat(sin(phase * 1.8)) * 0.012))
+        context.scaleBy(x: 1 - touch * 0.007, y: 1 + touch * 0.01)
+        context.translateBy(x: 0, y: -footY)
+        context.setAlpha(CGFloat(entry))
+
+        context.interpolationQuality = .high
+        context.draw(raster, in: CGRect(x: -maxFrameWidth / 2, y: -maxFrameHeight / 2,
+                                        width: maxFrameWidth, height: maxFrameHeight))
+        context.restoreGState()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    func drawCard(in view: NSView) {
+        guard bubbleVisible() else { return }
+        let rect = bubbleRect()
+        if tasks.count >= 2 {
+            drawTaskCard(rect: rect)
+        } else if let card = currentCard() {
+            drawStatusCard(rect: rect, card: card)
+        } else if !balanceSummary.isEmpty {
+            drawStatusCard(rect: rect, card: ("\(customSkinImage == nil ? "大肥鱼" : customSkinName)陪你待命", "DSH · 等待下一次任务", "IDLE"))
+        }
+        if !balanceSummary.isEmpty {
+            drawText(balanceSummary,
+                     in: NSRect(x: rect.minX + 16 * bubbleScale, y: rect.maxY - 31 * bubbleScale,
+                                width: rect.width - 32 * bubbleScale, height: 23 * bubbleScale),
+                     font: NSFont.systemFont(ofSize: 9 * max(1, bubbleScale)),
+                     color: Self.hex("#53616F"))
+        }
+    }
+
+    private func drawStatusCard(rect: NSRect, card: (title: String, detail: String, state: String)) {
+        let s = bubbleScale
+        drawCardSurface(rect: rect, state: card.state)
+
+        let iconCenter = NSPoint(x: rect.maxX - 34 * s, y: rect.minY + 42 * s)
+        drawStatusIcon(center: iconCenter, state: card.state, scale: s)
+
+        let textX = rect.minX + 16 * s
+        let textWidth = max(40, rect.width - 102 * s)
+        // 字号不随气泡等比缩小：缩小卡片只压缩几何尺寸（宽度、内边距、文字框），
+        // 字号保持基准大小。否则 bubbleScale 取下限 0.8 时标题会被缩到 8.8pt 而难以辨认。
+        // 放大方向仍跟随 bubbleScale（上限 1.2），保持原有观感。
+        let fontScale = min(1.2, max(1.0, s))
+        let titleFont = NSFont.systemFont(ofSize: max(8.0, 11.0 * fontScale), weight: .semibold)
+        let detailFont = NSFont.systemFont(ofSize: max(7.0, 9.0 * fontScale))
+        drawStatusPill(
+            state: card.state,
+            in: NSRect(x: textX, y: rect.minY + 11 * s, width: 88 * s, height: 15 * s),
+            scale: s
+        )
+        drawText(
+            card.title,
+            in: NSRect(x: textX, y: rect.minY + 31 * s, width: textWidth, height: max(12, 23 * s)),
+            font: titleFont,
+            color: Self.hex("#25282D")
+        )
+        drawText(
+            card.detail,
+            in: NSRect(x: textX, y: rect.minY + 55 * s, width: textWidth, height: max(12, 19 * s)),
+            font: detailFont,
+            color: Self.hex("#747981")
+        )
+    }
+
+    /// Gives the companion card a native macOS material feel without relying on
+    /// a system visual-effect view (which is unreliable in transparent panels).
+    /// State colour is deliberately subtle: it conveys activity at a glance
+    /// while leaving the character artwork as the visual focus.
+    private func drawCardSurface(rect: NSRect, state: String) {
+        let s = bubbleScale
+        let corner: CGFloat = 16 * s
+        let (accentBackground, accentForeground) = Self.statusColors[state] ?? ("#ECEEF1", "#747A84")
+        let accent = Self.hex(accentForeground)
+
+        NSGraphicsContext.saveGraphicsState()
+        if let context = NSGraphicsContext.current?.cgContext {
+            context.setShadow(
+                offset: CGSize(width: 0, height: 5 * s),
+                blur: 15 * s,
+                color: NSColor.black.withAlphaComponent(0.17).cgColor
+            )
+        }
+        let cardPath = NSBezierPath(roundedRect: rect, xRadius: corner, yRadius: corner)
+        NSColor(calibratedRed: 0.985, green: 0.988, blue: 0.996, alpha: 0.985).setFill()
+        cardPath.fill()
+        NSGraphicsContext.restoreGraphicsState()
+
+        // A restrained vertical tint makes SUCCESS / ERROR / WORKING readable
+        // even when the card text is truncated.
+        let tint = Self.hex(accentBackground).withAlphaComponent(0.42)
+        let gradient = NSGradient(
+            starting: tint,
+            ending: NSColor.white.withAlphaComponent(0.03)
+        )
+        gradient?.draw(in: cardPath, angle: 90)
+
+        let accentPath = NSBezierPath(
+            roundedRect: NSRect(x: rect.minX + 11 * s, y: rect.minY + 6 * s,
+                                width: max(18 * s, rect.width - 22 * s), height: 3 * s),
+            xRadius: 1.5 * s,
+            yRadius: 1.5 * s
+        )
+        accent.withAlphaComponent(0.75).setFill()
+        accentPath.fill()
+
+        NSColor.white.withAlphaComponent(0.85).setStroke()
+        cardPath.lineWidth = 1
+        cardPath.stroke()
+
+        // The small tail visually attaches the floating status to the pet.
+        let petCenter = petRect().midX
+        let tailCenter = min(max(petCenter, rect.minX + 26 * s), rect.maxX - 26 * s)
+        let tail = NSBezierPath()
+        tail.move(to: NSPoint(x: tailCenter - 9 * s, y: rect.maxY - 1 * s))
+        tail.line(to: NSPoint(x: tailCenter + 9 * s, y: rect.maxY - 1 * s))
+        tail.line(to: NSPoint(x: tailCenter, y: rect.maxY + 11 * s))
+        tail.close()
+        tint.withAlphaComponent(0.92).setFill()
+        tail.fill()
+    }
+
+    private func drawStatusPill(state: String, in rect: NSRect, scale s: CGFloat) {
+        let (backgroundHex, foregroundHex) = Self.statusColors[state] ?? ("#ECEEF1", "#747A84")
+        let background = Self.hex(backgroundHex)
+        let pillPath = NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
+        background.withAlphaComponent(0.95).setFill()
+        pillPath.fill()
+        let phase = CGFloat((sin(CACurrentMediaTime() * 4.0) + 1) / 2)
+        let dotAlpha: CGFloat = (state == "THINKING" || state == "WORKING") ? 0.55 + phase * 0.45 : 1
+        Self.hex(foregroundHex).withAlphaComponent(dotAlpha).setFill()
+        NSBezierPath(ovalIn: NSRect(x: rect.minX + 6 * s, y: rect.midY - 2.5 * s,
+                                    width: 5 * s, height: 5 * s)).fill()
+        drawText(
+            Self.labels[state] ?? state,
+            in: NSRect(x: rect.minX + 15 * s, y: rect.minY + 2 * s,
+                       width: rect.width - 19 * s, height: rect.height - 3 * s),
+            font: NSFont.systemFont(ofSize: max(7, 8 * max(1, min(1.2, s))), weight: .medium),
+            color: Self.hex(foregroundHex)
+        )
+    }
+
+    private func drawStatusIcon(center: NSPoint, state: String, scale s: CGFloat) {
+        let (bgHex, fgHex) = Self.statusColors[state] ?? ("#ECEEF1", "#747A84")
+        let radius: CGFloat = 23 * s
+        Self.hex(bgHex).setFill()
+        NSBezierPath(ovalIn: NSRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)).fill()
+
+        let foreground = Self.hex(fgHex)
+        let lineWidth: CGFloat = 3 * s
+        switch state {
+        case "SUCCESS":
+            strokeLine(from: NSPoint(x: center.x - 10 * s, y: center.y),
+                       to: NSPoint(x: center.x - 3 * s, y: center.y + 8 * s),
+                       width: lineWidth, color: foreground)
+            strokeLine(from: NSPoint(x: center.x - 3 * s, y: center.y + 8 * s),
+                       to: NSPoint(x: center.x + 12 * s, y: center.y - 10 * s),
+                       width: lineWidth, color: foreground)
+        case "ERROR":
+            strokeLine(from: NSPoint(x: center.x - 8 * s, y: center.y - 8 * s),
+                       to: NSPoint(x: center.x + 8 * s, y: center.y + 8 * s),
+                       width: lineWidth, color: foreground)
+            strokeLine(from: NSPoint(x: center.x + 8 * s, y: center.y - 8 * s),
+                       to: NSPoint(x: center.x - 8 * s, y: center.y + 8 * s),
+                       width: lineWidth, color: foreground)
+        case "WAITING":
+            strokeLine(from: NSPoint(x: center.x, y: center.y - 10 * s),
+                       to: NSPoint(x: center.x, y: center.y + 3 * s),
+                       width: lineWidth, color: foreground)
+            foreground.setFill()
+            NSBezierPath(ovalIn: NSRect(x: center.x - 2 * s, y: center.y + 9 * s, width: 4 * s, height: 4 * s)).fill()
+        case "THINKING", "WORKING":
+            for (index, offset) in [-9.0, 0.0, 9.0].enumerated() {
+                let phase = CGFloat((sin(CACurrentMediaTime() * 6.0 + Double(index) * 1.25) + 1) / 2)
+                foreground.withAlphaComponent(0.45 + phase * 0.55).setFill()
+                NSBezierPath(ovalIn: NSRect(x: center.x + CGFloat(offset) * s - 3 * s,
+                                            y: center.y - (3 + phase * 2) * s,
+                                            width: 6 * s,
+                                            height: 6 * s)).fill()
+            }
+        default:
+            foreground.setFill()
+            NSBezierPath(ovalIn: NSRect(x: center.x - 5 * s, y: center.y - 5 * s, width: 10 * s, height: 10 * s)).fill()
+        }
+    }
+
+    private func drawTaskCard(rect: NSRect) {
+        let s = bubbleScale
+        let activeStates = tasks.compactMap { Self.stringValue($0["state"]) }
+        let primaryState = activeStates.first(where: { $0 == "WORKING" || $0 == "THINKING" })
+            ?? activeStates.first
+            ?? "WORKING"
+        drawCardSurface(rect: rect, state: primaryState)
+
+        let textX = rect.minX + 16 * s
+        let textWidth = max(40, rect.width - 32 * s)
+        // 字号不随气泡等比缩小：缩小卡片只压缩几何尺寸（宽度、内边距、文字框），
+        // 字号保持基准大小。否则 bubbleScale 取下限 0.8 时标题会被缩到 8.8pt 而难以辨认。
+        // 放大方向仍跟随 bubbleScale（上限 1.2），保持原有观感。
+        let fontScale = min(1.2, max(1.0, s))
+        let titleFont = NSFont.systemFont(ofSize: max(8.0, 11.0 * fontScale), weight: .semibold)
+        let detailFont = NSFont.systemFont(ofSize: max(7.0, 9.0 * fontScale))
+        drawStatusPill(
+            state: primaryState,
+            in: NSRect(x: textX, y: rect.minY + 10 * s, width: 88 * s, height: 15 * s),
+            scale: s
+        )
+        drawText(
+            "\(tasks.count) 个任务进行中",
+            in: NSRect(x: textX + 96 * s, y: rect.minY + 10 * s,
+                       width: max(30, textWidth - 96 * s), height: max(12, 22 * s)),
+            font: titleFont,
+            color: Self.hex("#25282D")
+        )
+
+        for (index, task) in tasks.prefix(3).enumerated() {
+            let rowY = rect.minY + (36 + CGFloat(index) * 24) * s
+            let state = Self.stringValue(task["state"]) ?? "IDLE"
+            let stateLabel = Self.labels[state] ?? state
+            let label = Self.stringValue(task["project"])
+                ?? Self.stringValue(task["task"])
+                ?? Self.stringValue(task["message"])
+                ?? stateLabel
+            let line = "\(stateLabel) · \(label)"
+            let (_, fgHex) = Self.statusColors[state] ?? ("#ECEEF1", "#747A84")
+            Self.hex(fgHex).setFill()
+            NSBezierPath(ovalIn: NSRect(x: textX, y: rowY + 4 * s, width: 8 * s, height: 8 * s)).fill()
+            drawText(
+                line,
+                in: NSRect(x: textX + 14 * s, y: rowY, width: textWidth - 14 * s, height: max(12, 20 * s)),
+                font: detailFont,
+                color: Self.hex("#747981")
+            )
+        }
+        if tasks.count > 3 {
+            drawText(
+                "还有 \(tasks.count - 3) 个任务…",
+                in: NSRect(x: textX + 14 * s, y: rect.minY + (36 + 3 * 24) * s,
+                           width: textWidth, height: max(12, 20 * s)),
+                font: detailFont,
+                color: Self.hex("#9AA0A6")
+            )
+        }
+    }
+
+    private func drawText(_ text: String, in rect: NSRect, font: NSFont, color: NSColor) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: color,
+            .paragraphStyle: paragraph,
+        ]
+        (text as NSString).draw(in: rect, withAttributes: attributes)
+    }
+
+    private func strokeLine(from: NSPoint, to: NSPoint, width: CGFloat, color: NSColor) {
+        color.setStroke()
+        let path = NSBezierPath()
+        path.lineWidth = width
+        path.lineCapStyle = .round
+        path.move(to: from)
+        path.line(to: to)
+        path.stroke()
+    }
+
+    // MARK: - Misc
+
+    private func maybeSaveSnapshot() {
+        guard let snapshotURL = snapshotURL, !snapshotSaved, !isHeadless() else { return }
+        snapshotSaved = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+            guard let self = self, let view = self.contentView else { return }
+            if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: rep)
+                if let data = rep.representation(using: .png, properties: [:]) {
+                    try? data.write(to: snapshotURL)
+                }
+            }
+        }
+    }
+
+    private func logEvent(_ message: [String: Any]) {
+        guard let eventLogURL = eventLogURL,
+              let data = try? JSONSerialization.data(withJSONObject: message),
+              let line = String(data: data, encoding: .utf8) else { return }
+        let payload = Data((line + "\n").utf8)
+        if let handle = try? FileHandle(forWritingTo: eventLogURL) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: payload)
+        } else {
+            try? payload.write(to: eventLogURL)
+        }
+    }
+
+    static func clampedScale(_ value: Double) -> Double {
+        min(1.4, max(0.55, value))
+    }
+
+    static func clampedBubbleScale(_ value: Double) -> Double {
+        min(1.2, max(0.8, value))
+    }
+
+    private static func stringValue(_ value: Any?) -> String? {
+        if let string = value as? String { return string }
+        if let number = value as? NSNumber { return number.stringValue }
+        return nil
+    }
+
+    private static func intValue(_ value: Any?) -> Int? {
+        if let int = value as? Int { return int }
+        if let double = value as? Double { return Int(double) }
+        if let string = value as? String { return Int(string) }
+        return nil
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double? {
+        if let double = value as? Double { return double }
+        if let int = value as? Int { return Double(int) }
+        if let string = value as? String { return Double(string) }
+        return nil
+    }
+
+    private static func nowMs() -> Int {
+        Int(Date().timeIntervalSince1970 * 1000)
+    }
+
+    private func reportSettings(_ values: [String: Any]) {
+        ProtocolIO.shared.write([
+            "protocolVersion": 1,
+            "kind": "settings",
+            "timestamp": Self.nowMs(),
+        ].merging(values) { _, new in new })
+    }
+
+    private static func hex(_ hex: String) -> NSColor {
+        let value = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        if value.count == 6 {
+            let red = Double(Int(value.prefix(2), radix: 16) ?? 0) / 255
+            let green = Double(Int(value.dropFirst(2).prefix(2), radix: 16) ?? 0) / 255
+            let blue = Double(Int(value.dropFirst(4).prefix(2), radix: 16) ?? 0) / 255
+            return NSColor(calibratedRed: red, green: green, blue: blue, alpha: 1)
+        }
+        return .gray
+    }
+}
