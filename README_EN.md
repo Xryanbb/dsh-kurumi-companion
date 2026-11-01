@@ -2,7 +2,7 @@
 
 This is a separately maintained Kurumi add-on repository; it is not a GitHub fork. It connects Kurumi's transparent animation frames to the DSH BigFish plugin's state protocol and native macOS Helper. Install the upstream [QCYTSN/dsh-dafeiyu](https://github.com/QCYTSN/dsh-dafeiyu) separately. Its authors retain credit for the original project code and features.
 
-The skin contains 60 unique transparent frames across seven sequences: idle, thinking, reading, greeting, head-pat, poke, and hair-ribbon response. A new greeting sequence adds anticipation, two wave beats, and a recovery that ends on the approved idle portrait. Its keyframes share the idle artwork's scale and foot baseline, with eased transitions between poses. Idle behavior occasionally alternates thinking and greeting according to DSH's activity interval. New tasks interrupt decorative actions. Kurumi has no animal tail; touching the hair-accessory area plays the ribbon-adjustment response.
+The skin contains 60 unique transparent frames across seven sequences: idle, thinking, reading, greeting, head-pat, poke, and hair-ribbon response. The staged greeting adds six transparent key poses for a gentle arm lift, two wave beats, and a recovery to the approved idle portrait. Each pose matches the idle art's visible height and foot baseline; a short eased transition occupies the last 45% of each keyframe beat to reduce scale jumps and ghosting. Idle behavior occasionally alternates thinking and greeting according to DSH's activity interval. New tasks interrupt decorative actions. Kurumi has no animal tail; touching the hair-accessory area plays the ribbon-adjustment response.
 
 | Idle | Thinking / waiting |
 | --- | --- |
@@ -20,7 +20,7 @@ The skin contains 60 unique transparent frames across seven sequences: idle, thi
 | --- | --- | --- |
 | ![Kurumi head-pat](extras/kurumi-animation/generated/kurumi-head-pat-preview.gif) | ![Kurumi poke](extras/kurumi-animation/generated/kurumi-poke-preview.gif) | ![Kurumi ribbon](extras/kurumi-animation/generated/kurumi-hair-ribbon-preview.gif) |
 
-Older GIFs show frame order without the Helper's pose mixing. The new greeting preview uses the Helper's reference scale and foot baseline before easing between poses. See the [Windows action mapping](extras/kurumi-animation/windows-action-port.md), [prompt set](extras/kurumi-animation/generated/wave-prompt-v3.md), and [NOTICE](NOTICE.md) for scope and attribution.
+Older GIFs show frame order without the Helper's pose mixing. The new greeting preview normalizes visible height and foot placement against the approved idle art before easing between poses. See the [Windows action mapping](extras/kurumi-animation/windows-action-port.md), [prompt set](extras/kurumi-animation/generated/wave-prompt-v3.md), and [NOTICE](NOTICE.md) for scope and attribution.
 
 ## Install
 
