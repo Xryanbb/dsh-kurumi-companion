@@ -17,7 +17,7 @@ test('dry-run does not create the selected DSH directory', () => {
     }))
     assert.equal(result.dryRun, true)
     assert.equal(existsSync(dshHome), false)
-    assert.equal(result.selection.imagePath, join(dshHome, 'dsh-dafeiyu', 'skins', 'kurumi-animated-v2', 'idle.png'))
+    assert.equal(result.selection.imagePath, join(dshHome, 'dsh-dafeiyu', 'skins', 'kurumi-animated-v3', 'idle.png'))
   } finally {
     rmSync(temporary, { recursive: true, force: true })
   }

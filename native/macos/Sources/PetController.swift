@@ -27,9 +27,15 @@ final class PetPanel: NSPanel {
 
 final class PetController: NSObject {
     private struct CustomSkinFrameSequence {
-        let frames: [String]
+        let enterFrames: [String]
+        let bodyFrames: [String]
+        let exitFrames: [String]
         let frameMs: Double
         let loops: Bool
+        let interpolates: Bool
+        let normalizesToSkinScale: Bool
+
+        var frames: [String] { enterFrames + bodyFrames + exitFrames }
     }
 
     static let labels: [String: String] = [
@@ -82,6 +88,7 @@ final class PetController: NSObject {
     /// Optional local poses use lightweight native motion. Once an idle image
     /// is loaded, missing poses always fall back to that image.
     private var customSkinImage: NSImage?
+    private var customSkinFrameFit: CGFloat?
     private var customSkin3D = false
     private var sceneView: Kurumi3DView?
     private var customStateImages: [String: NSImage] = [:]
@@ -273,15 +280,24 @@ final class PetController: NSObject {
         customBlinkImage = loadSkinImage(at: selection["blinkImagePath"] as? String)
         if let sequences = selection["frameSequences"] as? [String: Any] {
             for (state, value) in sequences where Self.labels[state] != nil || state.hasPrefix("INTERACTION_") {
-                guard let definition = value as? [String: Any],
-                      let frames = definition["frames"] as? [String],
-                      !frames.isEmpty, frames.count <= 3_600,
+                guard let definition = value as? [String: Any] else { continue }
+                let fallbackFrames = definition["frames"] as? [String] ?? []
+                let enterFrames = definition["enter"] as? [String] ?? []
+                let bodyFrames = definition["body"] as? [String] ?? fallbackFrames
+                let exitFrames = definition["exit"] as? [String] ?? []
+                guard !enterFrames.isEmpty || !bodyFrames.isEmpty || !exitFrames.isEmpty else { continue }
+                let frames = enterFrames + bodyFrames + exitFrames
+                guard !frames.isEmpty, frames.count <= 3_600,
                       frames.allSatisfy({ $0.hasPrefix("/") }) else { continue }
                 let requestedFrameMs = (definition["frameMs"] as? NSNumber)?.doubleValue ?? 180
                 customFrameSequences[state] = CustomSkinFrameSequence(
-                    frames: frames,
+                    enterFrames: enterFrames,
+                    bodyFrames: bodyFrames,
+                    exitFrames: exitFrames,
                     frameMs: min(10_000, max(10, requestedFrameMs)),
-                    loops: (definition["loop"] as? Bool) ?? false
+                    loops: (definition["loop"] as? Bool) ?? false,
+                    interpolates: (definition["interpolate"] as? Bool) ?? false,
+                    normalizesToSkinScale: (definition["normalizeToSkinScale"] as? Bool) ?? false
                 )
             }
         }
@@ -295,20 +311,11 @@ final class PetController: NSObject {
         FileHandle.standardError.write(Data("Loaded local companion skin: \(customStateImages.count) state poses, \(customFrameSequences.count) frame sequences / \(sequenceFrameCount) frames, interaction=\(customInteractionImage != nil), dragging=\(customDraggingImage != nil), blink=\(customBlinkImage != nil), internalWarp=\(Self.customWarp != nil), normalized alpha bounds, continuous 60 Hz native motion\n".utf8))
     }
 
-    private func loadSkinImage(at path: String?, cacheTexture: Bool = true) -> NSImage? {
-        guard let path = path, path.hasPrefix("/"),
-              let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-              let fileSize = attributes[.size] as? NSNumber,
-              fileSize.intValue > 0, fileSize.intValue <= 16 * 1024 * 1024,
-              let image = NSImage(contentsOfFile: path), image.isValid,
-              image.size.width > 0, image.size.height > 0 else { return nil }
-        guard let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
-              source.width <= 8192, source.height <= 8192,
-              source.width * source.height <= 24_000_000 else { return nil }
+    private func visibleAlphaBounds(of source: CGImage) -> CGRect? {
         let width = source.width
         let height = source.height
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        let alphaBounds: CGRect? = pixels.withUnsafeMutableBytes { bytes in
+        return pixels.withUnsafeMutableBytes { bytes in
             let rgba = bytes.bindMemory(to: UInt8.self)
             guard let context = CGContext(data: bytes.baseAddress, width: width, height: height,
                                           bitsPerComponent: 8, bytesPerRow: width * 4,
@@ -328,7 +335,19 @@ final class PetController: NSObject {
                           width: min(width - 1, maxX + 2) - max(0, minX - 2) + 1,
                           height: min(height - 1, maxY + 2) - max(0, minY - 2) + 1)
         }
-        guard let bounds = alphaBounds, let cropped = source.cropping(to: bounds) else { return nil }
+    }
+
+    private func loadSkinImage(at path: String?, cacheTexture: Bool = true) -> NSImage? {
+        guard let path = path, path.hasPrefix("/"),
+              let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let fileSize = attributes[.size] as? NSNumber,
+              fileSize.intValue > 0, fileSize.intValue <= 16 * 1024 * 1024,
+              let image = NSImage(contentsOfFile: path), image.isValid,
+              image.size.width > 0, image.size.height > 0 else { return nil }
+        guard let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              source.width <= 8192, source.height <= 8192,
+              source.width * source.height <= 24_000_000 else { return nil }
+        guard let bounds = visibleAlphaBounds(of: source), let cropped = source.cropping(to: bounds) else { return nil }
         // Normalize actual visible content, rather than each file's padding.
         // Every pose has the same visual height and foot baseline at 96%.
         let canvas = CGSize(width: maxFrameWidth, height: maxFrameHeight)
@@ -340,6 +359,7 @@ final class PetController: NSObject {
         normalized.scaleBy(x: rasterScale, y: rasterScale)
         normalized.interpolationQuality = .high
         let fit = min(canvas.height * 0.77 / bounds.height, canvas.width * 0.78 / bounds.width)
+        if cacheTexture, customSkinFrameFit == nil { customSkinFrameFit = fit }
         let visual = CGSize(width: bounds.width * fit, height: bounds.height * fit)
         normalized.draw(cropped, in: CGRect(x: (canvas.width - visual.width) / 2,
                                             y: canvas.height * 0.04,
@@ -350,6 +370,40 @@ final class PetController: NSObject {
             customTextures[ObjectIdentifier(result)] = CIImage(cgImage: raster)
         }
         return result
+    }
+
+    private func loadSequenceFrameTexture(at path: String, normalizesToSkinScale: Bool) -> CIImage? {
+        let key = path as NSString
+        if let cached = customFrameTextureCache.object(forKey: key) { return cached }
+        guard path.hasPrefix("/"),
+              let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let fileSize = attributes[.size] as? NSNumber,
+              fileSize.intValue > 0, fileSize.intValue <= 16 * 1024 * 1024,
+              let image = NSImage(contentsOfFile: path),
+              let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              source.width <= 8192, source.height <= 8192,
+              source.width * source.height <= 24_000_000,
+              let bounds = visibleAlphaBounds(of: source),
+              let cropped = source.cropping(to: bounds) else { return nil }
+        let canvas = CGSize(width: maxFrameWidth, height: maxFrameHeight)
+        let fit = normalizesToSkinScale ? customSkinFrameFit : nil
+        let actualFit = fit ?? min(canvas.height * 0.77 / bounds.height, canvas.width * 0.78 / bounds.width)
+        let visual = CGSize(width: bounds.width * actualFit, height: bounds.height * actualFit)
+        let rasterScale: CGFloat = 2
+        guard let normalized = CGContext(data: nil, width: Int(canvas.width * rasterScale),
+                                          height: Int(canvas.height * rasterScale), bitsPerComponent: 8,
+                                          bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        normalized.scaleBy(x: rasterScale, y: rasterScale)
+        normalized.interpolationQuality = .high
+        normalized.draw(cropped, in: CGRect(x: (canvas.width - visual.width) / 2,
+                                            y: canvas.height * 0.04,
+                                            width: visual.width, height: visual.height))
+        guard let raster = normalized.makeImage() else { return nil }
+        let texture = CIImage(cgImage: raster)
+        customFrameTextureCache.setObject(texture, forKey: key,
+                                          cost: Int(maxFrameWidth * maxFrameHeight * 16))
+        return texture
     }
 
     private func loadFrames() {
@@ -614,7 +668,8 @@ final class PetController: NSObject {
                     if let pose = choices.randomElement(), let sequence = self.customFrameSequences[pose] {
                         self.lastCustomIdleAction = pose
                         self.customActionPose = pose
-                        self.customActionUntil = now + Double(sequence.frames.count) * sequence.frameMs / 1000 + 0.24
+                        let returnPadding = sequence.exitFrames.isEmpty ? 0.24 : 0
+                        self.customActionUntil = now + Double(sequence.frames.count) * sequence.frameMs / 1000 + returnPadding
                         let elapsed = max(0, now - self.customSkinShownAt)
                         self.customFrameSequenceStartedAt[pose] = elapsed
                         self.customFrameSequencePose = pose
@@ -893,7 +948,7 @@ final class PetController: NSObject {
             ("IDLE", 0, "回到当前状态"),
             ("THINKING", 3.8, "让我想一想……"),
             ("WORKING", 4.2, "狂三开始翻书工作啦"),
-            ("SUCCESS", 2.8, "做得不错呢，给你一个招手~"),
+            ("SUCCESS", 1.12, "做得不错呢，给你一个招手~"),
             ("INTERACTION_HEAD_PAT", 1.45, "舒服地眯一下眼睛~"),
             ("INTERACTION_POKE", 1.32, "哎呀，突然戳我做什么~"),
             ("INTERACTION_HAIR_RIBBON", 1.45, "让我把发带整理好~"),
@@ -1282,8 +1337,10 @@ final class PetController: NSObject {
         }
         if customInteractionAt > 0 {
             let pose = customInteractionPose ?? "interaction"
-            let duration = customFrameSequences[pose].map { Double($0.frames.count) * $0.frameMs / 1000 } ?? 1.5
-            if now - customInteractionAt < duration + 0.3 {
+            let sequence = customFrameSequences[pose]
+            let duration = sequence.map { Double($0.frames.count) * $0.frameMs / 1000 } ?? 1.5
+            let returnPadding = sequence?.exitFrames.isEmpty == false ? 0 : 0.3
+            if now - customInteractionAt < duration + returnPadding {
                 return (pose, customInteractionImage ?? idle)
             }
             customInteractionAt = 0
@@ -1324,38 +1381,55 @@ final class PetController: NSObject {
 
     private func customFrameTexture(for poseKey: String, elapsed: Double) -> CIImage? {
         guard let sequence = customFrameSequences[poseKey], !sequence.frames.isEmpty else { return nil }
-        let count = sequence.frames.count
+        let frames = sequence.frames
+        let count = frames.count
         let framePosition = max(0, elapsed) * 1000 / sequence.frameMs
-        let position: Double
+        let frameIndex: Int
+        let nextIndex: Int?
+        let fraction: Double
         if sequence.loops {
-            position = framePosition.truncatingRemainder(dividingBy: Double(count))
+            let enterCount = sequence.enterFrames.count
+            let bodyCount = sequence.bodyFrames.count
+            if enterCount > 0, framePosition < Double(enterCount) {
+                let position = framePosition
+                frameIndex = min(enterCount - 1, Int(floor(position)))
+                fraction = position - floor(position)
+                nextIndex = frameIndex + 1 < enterCount ? frameIndex + 1 : (bodyCount > 0 ? enterCount : nil)
+            } else if bodyCount > 0 {
+                let bodyStart = enterCount
+                let bodyPosition = max(0, framePosition - Double(enterCount))
+                    .truncatingRemainder(dividingBy: Double(bodyCount))
+                let bodyIndex = Int(floor(bodyPosition))
+                frameIndex = bodyStart + bodyIndex
+                nextIndex = bodyStart + ((bodyIndex + 1) % bodyCount)
+                fraction = bodyPosition - Double(bodyIndex)
+            } else {
+                let position = min(framePosition, Double(count - 1))
+                frameIndex = Int(floor(position))
+                fraction = position - Double(frameIndex)
+                nextIndex = frameIndex + 1 < count ? frameIndex + 1 : nil
+            }
         } else {
-            position = min(framePosition, Double(count - 1))
+            let position = min(framePosition, Double(count - 1))
+            frameIndex = Int(floor(position))
+            fraction = position - Double(frameIndex)
+            nextIndex = frameIndex + 1 < count ? frameIndex + 1 : nil
         }
-        let frameIndex = Int(floor(position))
-        let fraction = position - Double(frameIndex)
 
         func texture(at index: Int) -> CIImage? {
-            let path = sequence.frames[index]
+            guard frames.indices.contains(index) else { return nil }
+            let path = frames[index]
             let key = path as NSString
             if let cached = customFrameTextureCache.object(forKey: key) { return cached }
-            guard let image = loadSkinImage(at: path, cacheTexture: false),
-                  let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
-            let texture = CIImage(cgImage: cgImage)
-            customFrameTextureCache.setObject(texture, forKey: key, cost: Int(maxFrameWidth * maxFrameHeight * 16))
-            return texture
+            return loadSequenceFrameTexture(at: path,
+                                            normalizesToSkinScale: sequence.normalizesToSkinScale)
         }
 
         guard let current = texture(at: frameIndex) else { return nil }
-        let nextIndex: Int
-        if frameIndex + 1 < count {
-            nextIndex = frameIndex + 1
-        } else if sequence.loops {
-            nextIndex = 0
-        } else {
-            return current
-        }
-        let blend = min(1, max(0, (fraction - 0.72) / 0.28))
+        guard let nextIndex = nextIndex else { return current }
+        let t = min(1, max(0, fraction))
+        let eased = t * t * t * (t * (t * 6 - 15) + 10)
+        let blend = sequence.interpolates ? eased : min(1, max(0, (fraction - 0.72) / 0.28))
         guard blend > 0, let next = texture(at: nextIndex) else { return current }
         return current.applyingFilter("CIDissolveTransition", parameters: [
             kCIInputTargetImageKey: next,
@@ -1459,6 +1533,11 @@ final class PetController: NSObject {
         let entry = 1 - pow(1 - progress, 3)
         // A single phase runs throughout all poses and transitions.
         let phase = elapsed * 1.7
+        let idleWeight = CGFloat(weights["IDLE"] ?? 0)
+        let breathing = motion ? CGFloat(sin(elapsed * 2.15)) : 0
+        let bob = motion ? CGFloat(sin(elapsed * 1.78 + 0.38)) * (1.1 + idleWeight * 1.0) : 0
+        let sway = motion ? CGFloat(sin(elapsed * 1.16)) * (0.004 + idleWeight * 0.003) : 0
+        let breathScale = breathing * (0.003 + idleWeight * 0.003)
         let entryScale = CGFloat(0.96 + entry * 0.04)
         guard let raster = customSkinRaster(idle: idle, weights: weights, elapsed: elapsed,
                                            drag: drag, touch: touch, motion: motion) else { return }
@@ -1469,14 +1548,15 @@ final class PetController: NSObject {
             return
         }
         context.saveGState()
-        context.translateBy(x: rect.midX,
-                            y: rect.midY + CGFloat(1 - entry) * 10 * scale - drag * 5 * scale - touch * 2 * scale)
-        context.scaleBy(x: scale * entryScale, y: -scale * entryScale)
-        // Rotate and breathe around the shared foot anchor, not the canvas
-        // center. The exact damped spring settles smoothly after release.
+        context.translateBy(x: rect.midX + CGFloat(sin(phase * 0.72)) * 0.75 * scale,
+                            y: rect.midY + bob * scale + CGFloat(1 - entry) * 10 * scale - drag * 5 * scale - touch * 2 * scale)
+        context.scaleBy(x: scale * entryScale * (1 + breathScale * 0.5),
+                        y: -scale * entryScale * (1 + breathScale))
+        // Breathe and sway around the shared foot anchor; the damped spring
+        // remains responsible for touch and drag recovery.
         let footY = -maxFrameHeight * 0.46
         context.translateBy(x: 0, y: footY)
-        context.rotate(by: drag * (0.012 + CGFloat(sin(phase * 1.8)) * 0.012))
+        context.rotate(by: sway + drag * (0.012 + CGFloat(sin(phase * 1.8)) * 0.012))
         context.scaleBy(x: 1 - touch * 0.007, y: 1 + touch * 0.01)
         context.translateBy(x: 0, y: -footY)
         context.setAlpha(CGFloat(entry))

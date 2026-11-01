@@ -12,6 +12,7 @@ if (args.some((arg) => arg !== '--dry-run')) {
 }
 const skinRoot = dirname(fileURLToPath(import.meta.url))
 const source = join(skinRoot, 'images')
+const approvedIdleSource = join(skinRoot, '../kurumi-animation/reference/idle-approved.png')
 const idleFrameSource = join(skinRoot, 'animations', 'idle')
 const happyFrameSource = join(skinRoot, 'animations', 'happy')
 const thinkingFrameSource = join(skinRoot, 'animations', 'thinking')
@@ -21,7 +22,7 @@ const pokeFrameSource = join(skinRoot, 'animations', 'poke')
 const hairRibbonFrameSource = join(skinRoot, 'animations', 'hair_ribbon')
 const dshHome = resolve(process.env.DSH_HOME || join(homedir(), '.dsh'))
 const directory = join(dshHome, 'dsh-dafeiyu')
-const target = join(directory, 'skins', 'kurumi-animated-v2')
+const target = join(directory, 'skins', 'kurumi-animated-v3')
 const idleFrameTarget = join(target, 'animations', 'idle-v1')
 const happyFrameTarget = join(target, 'animations', 'happy-wave-v1')
 const thinkingFrameTarget = join(target, 'animations', 'thinking-v1')
@@ -29,6 +30,8 @@ const workingFrameTarget = join(target, 'animations', 'working-v1')
 const headPatFrameTarget = join(target, 'animations', 'head-pat-v1')
 const pokeFrameTarget = join(target, 'animations', 'poke-v1')
 const hairRibbonFrameTarget = join(target, 'animations', 'hair-ribbon-v1')
+const greetingFrameSource = join(skinRoot, '../kurumi-animation/generated')
+const greetingFrameTarget = join(target, 'animations', 'greeting-wave-v1')
 const selectionPath = join(directory, 'skin.json')
 const names = ['idle', 'idle-blink', 'thought', 'working', 'happy', 'dragging']
 const images = Object.fromEntries(names.map((name) => [name, join(target, `${name}.png`)]))
@@ -53,12 +56,22 @@ const pokeFramePaths = pokeFrameNames.map((name) => join(pokeFrameTarget, name))
 const hairRibbonFrameNames = happyFrameNames
 const hairRibbonFrameSources = hairRibbonFrameNames.map((name) => join(hairRibbonFrameSource, name))
 const hairRibbonFramePaths = hairRibbonFrameNames.map((name) => join(hairRibbonFrameTarget, name))
+const greetingFrameNames = [
+  'wave-anticipation-v1.png',
+  'wave-intermediate-v1.png',
+  'wave-intermediate-v2.png',
+  'wave-recovery-v1.png',
+  'wave-lowered-v1.png',
+]
+const greetingFrameSources = greetingFrameNames.map((name) => join(greetingFrameSource, name))
+const greetingFramePaths = greetingFrameNames.map((name) => join(greetingFrameTarget, name))
 
 // Validate all inputs before creating any user-directory files.
 for (const path of [
   ...names.map((name) => join(source, `${name}.png`)),
+  approvedIdleSource,
   ...idleFrameSources, ...happyFrameSources, ...thinkingFrameSources, ...workingFrameSources,
-  ...headPatFrameSources, ...pokeFrameSources, ...hairRibbonFrameSources,
+  ...headPatFrameSources, ...pokeFrameSources, ...hairRibbonFrameSources, ...greetingFrameSources,
 ]) {
   const bytes = readFileSync(path)
   if (bytes.length < 8 || !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
@@ -84,7 +97,15 @@ const selection = {
     THINKING: { frames: thinkingFramePaths, frameMs: 420, loop: true },
     WAITING: { frames: thinkingFramePaths, frameMs: 420, loop: true },
     WORKING: { frames: workingFramePaths, frameMs: 360, loop: true },
-    SUCCESS: { frames: happyFramePaths, frameMs: 260, loop: false },
+    SUCCESS: {
+      enter: [images.idle, greetingFramePaths[0]],
+      body: [greetingFramePaths[1], greetingFramePaths[2], greetingFramePaths[1]],
+      exit: [greetingFramePaths[3], greetingFramePaths[4], images.idle],
+      frameMs: 120,
+      loop: false,
+      interpolate: true,
+      normalizeToSkinScale: true,
+    },
     INTERACTION_HEAD_PAT: { frames: headPatFramePaths, frameMs: 120, loop: false },
     INTERACTION_POKE: { frames: pokeFramePaths, frameMs: 120, loop: false },
     INTERACTION_HAIR_RIBBON: { frames: hairRibbonFramePaths, frameMs: 120, loop: false },
@@ -96,7 +117,7 @@ if (args.includes('--dry-run')) {
   mkdirSync(target, { recursive: true, mode: 0o700 })
   for (const name of names) {
     const temporary = `${images[name]}.tmp-${process.pid}`
-    copyFileSync(join(source, `${name}.png`), temporary)
+    copyFileSync(name === 'idle' ? approvedIdleSource : join(source, `${name}.png`), temporary)
     renameSync(temporary, images[name])
   }
   mkdirSync(idleFrameTarget, { recursive: true, mode: 0o700 })
@@ -112,6 +133,7 @@ if (args.includes('--dry-run')) {
     { target: headPatFrameTarget, names: headPatFrameNames, sources: headPatFrameSources, paths: headPatFramePaths },
     { target: pokeFrameTarget, names: pokeFrameNames, sources: pokeFrameSources, paths: pokeFramePaths },
     { target: hairRibbonFrameTarget, names: hairRibbonFrameNames, sources: hairRibbonFrameSources, paths: hairRibbonFramePaths },
+    { target: greetingFrameTarget, names: greetingFrameNames, sources: greetingFrameSources, paths: greetingFramePaths },
   ]) {
     mkdirSync(sequence.target, { recursive: true, mode: 0o700 })
     for (let index = 0; index < sequence.names.length; index += 1) {
