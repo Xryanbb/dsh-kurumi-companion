@@ -2,7 +2,7 @@
 
 ## DSH desktop pet code
 
-The macOS Helper and animation-state integration are derived from components in [QCYTSN/dsh-dafeiyu](https://github.com/QCYTSN/dsh-dafeiyu), Copyright © 2026 QCYTSN and contributors, licensed under MIT. The original authors retain credit for the DSH pet, plugin features, and design. This project adds Kurumi skin loading, event-triggered one-shot frame playback, reduced-motion handling, and installation scripts.
+The macOS Helper and animation-state integration are derived from components in [QCYTSN/dsh-dafeiyu](https://github.com/QCYTSN/dsh-dafeiyu), Copyright © 2026 QCYTSN and contributors, licensed under MIT. The original authors retain credit for the DSH pet, plugin features, and design. This project adds Kurumi skin loading, event-triggered one-shot frame playback, reduced-motion handling, installation scripts, and a separate editable Kurumi 3D model.
 
 ## Windows action reference
 

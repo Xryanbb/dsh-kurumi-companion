@@ -22,6 +22,20 @@
 
 前两段 GIF 是早期动作示例；发带 v2 预览与当前 9 帧单次动作一致。桌宠待机仍保持静止，点击发饰才播放。详细来源见 [动画素材记录](extras/kurumi-animation/generated/README.md)、[Windows 动作参考](extras/kurumi-animation/windows-action-port.md) 与 [NOTICE](NOTICE.md)。
 
+## Blender 3D 模型 v3
+
+按已确认的狂三 Q 版桌宠比例制作了可编辑 3D 模型：大头短身、黑色双马尾、红黑发饰、短裙与小腿。当前交付是模型评审版；桌宠启动器仍使用现有 2D 皮肤，3D 模型接入和动作绑定是后续工作。
+
+| 正面 | 四分之三视角 |
+| --- | --- |
+| ![狂三 3D 正面](assets/kurumi3d/v3/front.png) | ![狂三 3D 四分之三视角](assets/kurumi3d/v3/quarter.png) |
+
+| 侧面 | 背面 |
+| --- | --- |
+| ![狂三 3D 侧面](assets/kurumi3d/v3/side.png) | ![狂三 3D 背面](assets/kurumi3d/v3/back.png) |
+
+工程文件为 [`kurumi-v3.blend`](assets/kurumi3d/v3/kurumi-v3.blend)，通用模型为 [`kurumi-v3.glb`](assets/kurumi3d/v3/kurumi-v3.glb)，macOS 模型导入包为 [`kurumi-v3.usdz`](assets/kurumi3d/v3/kurumi-v3.usdz)。模型由项目内的 `build_kurumi_v3.py` 生成；细节和素材来源见 [v3 模型说明](assets/kurumi3d/v3/README.md)。
+
 ## 安装
 
 需要 macOS 12+、Node.js 和 Xcode Command Line Tools。先完全退出 DSH Host，再在本项目根目录运行：
@@ -47,6 +61,7 @@ node extras/kurumi-skin/install-skin.mjs
 - 这是透明关键帧方案，不是 Live2D 或 Windows 版的 100 段动作库。
 - 时崎狂三属于《约会大作战》角色；相关图片为非官方同人素材，素材说明见 [ASSET_LICENSE.md](ASSET_LICENSE.md)。
 - 自动循环已关闭；交互动作仍使用旧关键姿势序列，24fps 透明视频替换尚未完成。
+- Blender v3 已完成可编辑模型与四视角样图；尚未替换到桌宠启动器，也未完成 3D 骨骼动画。
 
 ## 来源
 
