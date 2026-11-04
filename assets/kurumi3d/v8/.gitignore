@@ -1,0 +1,5 @@
+before-v8-session.blend
+*.blend1
+__pycache__/
+done.txt
+review-ready.txt

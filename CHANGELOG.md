@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### 2026-11-04 — v8 head study
+
+- Replaced Chinese and English homepage examples with the current v8 reference/front/three-quarter comparison; removed earlier GIF and v3 image embeds from the homepage.
+- Published the editable head-only Blender study, front/three-quarter/side/clay renders, hair texture, self-contained build helpers, and mesh-check report.
+- Documented facial and hair revisions, source attribution, the texture-generation prompt, and the unapproved status. The running 2D pet, runtime code, and animations are unchanged.
+
 - Added an editable Blender v3 Kurumi chibi model, GLB/USDZ exports, and front/three-quarter/side/back review renders; documented that runtime integration and rigged 3D actions remain follow-up work.
 - Slowed all three click responses to 240 ms per pose and updated their one-shot previews and skin installer mapping.
 - Added a staged 2D Kurumi greeting with a new arm-lift pose, repeated wave beats, and recovery to the approved idle portrait.

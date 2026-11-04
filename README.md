@@ -4,37 +4,21 @@
 
 桌宠待机保持静止；点击互动或 DSH 状态事件才播放一次动作，结束回到待机。旧的待机、思考和工作循环帧不再自动播放。DSH 的“减少动态效果”会冻结环境循环帧，但保留点击和状态事件触发的单次动作。三种点击互动都放慢到 240ms/帧，结束回到待机。它们是透明关键姿势序列，不是完整 24fps 视频。狂三没有动物尾巴。
 
-| 待机 | 思考 / 等待 |
-| --- | --- |
-| ![狂三待机](extras/kurumi-animation/generated/kurumi-idle-preview.gif) | ![狂三思考](extras/kurumi-animation/generated/kurumi-thinking-preview.gif) |
+## 当前建模预览：v8 头部小样
 
-| 翻书工作 | 开心招手 |
-| --- | --- |
-| ![狂三翻书工作](extras/kurumi-animation/generated/kurumi-working-preview.gif) | ![狂三招手](extras/kurumi-animation/generated/kurumi-wave-preview.gif) |
+下面依次为已确认的 2D 参考、v8 正面渲染、v8 斜侧渲染。首页已撤下早期动作 GIF 和 v3 示例图，当前仅展示这一版建模进度。
 
-| 新版分段招手（入场 → 主体 → 收势回待机） |
-| --- |
-| ![狂三分段招手](extras/kurumi-animation/generated/kurumi-wave-v2-preview.gif) |
+![狂三 v8 头部对照：2D 参考、正面、斜侧面](assets/kurumi3d/v8/comparison.png)
 
-| 摸头回应 | 戳击回应 | 整理发带 |
-| --- | --- | --- |
-| ![狂三摸头回应](extras/kurumi-animation/generated/kurumi-head-pat-preview.gif) | ![狂三戳击回应](extras/kurumi-animation/generated/kurumi-poke-preview.gif) | ![狂三整理发带 v2](extras/kurumi-animation/generated/kurumi-hair-ribbon-v2-preview-web.gif) |
+本轮调整了眼睛与脸部比例、分层刘海和卷梢、交叉发带及镂空蝴蝶结，并加入独立的发丝纹理。模型为有厚度的三维网格；上图中的模型画面均来自 Blender 实际渲染。
 
-前两段 GIF 是早期动作示例；发带 v2 预览与当前 9 帧单次动作一致。桌宠待机仍保持静止，点击发饰才播放。详细来源见 [动画素材记录](extras/kurumi-animation/generated/README.md)、[Windows 动作参考](extras/kurumi-animation/windows-action-port.md) 与 [NOTICE](NOTICE.md)。
+**这仍是未定稿的头部研究，尚未得到造型认可。** 侧面发饰和发根层次还需改进；本轮未完成全身、绑定或动作，也没有替换正在运行的 2D 桌宠。
 
-## Blender 3D 模型 v3
+[查看正面](assets/kurumi3d/v8/front.png) · [查看斜侧面](assets/kurumi3d/v8/quarter.png) · [查看侧面](assets/kurumi3d/v8/side.png) · [查看灰模](assets/kurumi3d/v8/clay-quarter.png)
 
-按已确认的狂三 Q 版桌宠比例制作了可编辑 3D 模型：大头短身、黑色双马尾、红黑发饰、短裙与小腿。当前交付是模型评审版；桌宠启动器仍使用现有 2D 皮肤，3D 模型接入和动作绑定是后续工作。
+[下载 Blender 工程](assets/kurumi3d/v8/kurumi-head-study.blend) · [建模源脚本、检查结果与素材出处](assets/kurumi3d/v8/README.md)
 
-| 正面 | 四分之三视角 |
-| --- | --- |
-| ![狂三 3D 正面](assets/kurumi3d/v3/front.png) | ![狂三 3D 四分之三视角](assets/kurumi3d/v3/quarter.png) |
-
-| 侧面 | 背面 |
-| --- | --- |
-| ![狂三 3D 侧面](assets/kurumi3d/v3/side.png) | ![狂三 3D 背面](assets/kurumi3d/v3/back.png) |
-
-工程文件为 [`kurumi-v3.blend`](assets/kurumi3d/v3/kurumi-v3.blend)，通用模型为 [`kurumi-v3.glb`](assets/kurumi3d/v3/kurumi-v3.glb)，macOS 模型导入包为 [`kurumi-v3.usdz`](assets/kurumi3d/v3/kurumi-v3.usdz)。模型由项目内的 `build_kurumi_v3.py` 生成；细节和素材来源见 [v3 模型说明](assets/kurumi3d/v3/README.md)。
+历史动作素材仍作为现有 2D 功能的资源保留，详细记录见[动画素材说明](extras/kurumi-animation/generated/README.md)与 [Windows 动作参考](extras/kurumi-animation/windows-action-port.md)。
 
 ## 安装
 
@@ -61,7 +45,7 @@ node extras/kurumi-skin/install-skin.mjs
 - 这是透明关键帧方案，不是 Live2D 或 Windows 版的 100 段动作库。
 - 时崎狂三属于《约会大作战》角色；相关图片为非官方同人素材，素材说明见 [ASSET_LICENSE.md](ASSET_LICENSE.md)。
 - 自动循环已关闭；交互动作仍使用旧关键姿势序列，24fps 透明视频替换尚未完成。
-- Blender v3 已完成可编辑模型与四视角样图；尚未替换到桌宠启动器，也未完成 3D 骨骼动画。
+- 当前展示 v8 头部建模小样；尚未完成全身与绑定，也未接入桌宠启动器。
 
 ## 来源
 

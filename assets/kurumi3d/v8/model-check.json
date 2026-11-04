@@ -1,0 +1,28 @@
+{
+  "stage": "unapproved head-only study",
+  "source_image": "extras/kurumi-animation/reference/idle-approved.png",
+  "source_dimensions": [
+    1374,
+    1145
+  ],
+  "real_meshes": 57,
+  "source_vertices": 65649,
+  "head_nonmanifold_edges": 0,
+  "packed_reference": true,
+  "animation_actions": 0,
+  "deployment": false,
+  "method": "closed meshes, calibrated isolated facial UV, dedicated hair albedo along strand UVs",
+  "reopened_independent_blend": true,
+  "head_scene_contains_review_planes": false,
+  "model_texture_count": 2,
+  "all_model_textures_packed": true,
+  "all_mesh_coordinates_finite": true,
+  "outputs": [
+    "front.png",
+    "quarter.png",
+    "side.png",
+    "clay-quarter.png",
+    "comparison.png",
+    "kurumi-head-study.blend"
+  ]
+}
