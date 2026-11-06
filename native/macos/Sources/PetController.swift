@@ -564,6 +564,9 @@ final class PetController: NSObject {
     // MARK: - Timers
 
     private var animationInterval: TimeInterval {
+        if customSkin3D, sceneView?.rig.isHeadStudyRequested == true {
+            return sceneView?.rig.headStudy?.isAnimating == true && !reducedMotion ? 1.0 / 60.0 : 0.2
+        }
         if reducedMotion { return 0.04 }
         if customSkin3D { return 1.0 / 30.0 }
         if customSkinImage != nil { return 1.0 / 60.0 }
@@ -755,6 +758,15 @@ final class PetController: NSObject {
     }
 
     func handleClick(at point: NSPoint, clickCount: Int, presentationTime: CFTimeInterval = CACurrentMediaTime()) {
+        if customSkin3D, sceneView?.rig.isHeadStudyRequested == true {
+            if clickCount >= 2, let event = NSApp.currentEvent {
+                showMenu(with: event)
+            } else {
+                showOverlay("v8 头部小样", "双击或右键选择视角；拖动移动位置", "IDLE", 2200)
+                contentView?.needsDisplay = true
+            }
+            return
+        }
         if clickCount >= 2 {
             playInteraction("head_pat", message: "好啦好啦，知道你喜欢我~", at: presentationTime)
             return
@@ -812,9 +824,16 @@ final class PetController: NSObject {
         guard let contentView = contentView else { return }
         let menu = NSMenu(title: customSkinImage == nil ? "DSH 大肥鱼" : "DSH \(customSkinName)")
         if customSkinImage != nil {
-            let mode = NSMenuItem(title: "3D 立体模式", action: #selector(toggle3D(_:)), keyEquivalent: "")
+            let mode = NSMenuItem(title: KurumiHeadStudy.runtimeURL == nil ? "3D 立体模式" : "3D 头部小样 v8", action: #selector(toggle3D(_:)), keyEquivalent: "")
             mode.target = self; mode.state = customSkin3D ? .on : .off; menu.addItem(mode)
-            if customSkin3D {
+            if customSkin3D, sceneView?.rig.isHeadStudyRequested == true {
+                for (label, tag) in [("正面", 100), ("斜侧面", 101), ("左侧面", 102), ("右侧面", 103), ("背面", 104), ("慢慢转一圈（8 秒）", 105)] {
+                    let item = NSMenuItem(title: label, action: #selector(perform3DAction(_:)), keyEquivalent: "")
+                    item.target = self; item.tag = tag
+                    item.isEnabled = sceneView?.rig.isHeadStudy == true
+                    menu.addItem(item)
+                }
+            } else if customSkin3D {
                 for (label, tag) in [("转身看看", 0), ("原地走步", 1), ("招招手", 2), ("点点头", 3)] {
                     let item = NSMenuItem(title: label, action: #selector(perform3DAction(_:)), keyEquivalent: "")
                     item.target = self; item.tag = tag; menu.addItem(item)
@@ -900,6 +919,15 @@ final class PetController: NSObject {
     }
 
     @objc private func perform3DAction(_ sender: NSMenuItem) {
+        if let study = sceneView?.rig.headStudy {
+            let actions = ["front", "quarter", "left", "right", "back", "turn"]
+            guard actions.indices.contains(sender.tag - 100) else { return }
+            study.setView(actions[sender.tag - 100], at: CACurrentMediaTime(),
+                reducedMotion: reducedMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+            sceneView?.needsDisplay = true
+            restartAnimTimer()
+            return
+        }
         sceneView?.rig.interact(sender.tag == 0 ? "turn" : sender.tag == 1 ? "walk" : sender.tag == 3 ? "nod" : "wave", at: CACurrentMediaTime())
     }
 
@@ -938,9 +966,11 @@ final class PetController: NSObject {
         guard let view = contentView else { return }
         if !customSkin3D { sceneView?.removeFromSuperview(); sceneView = nil; return }
         if sceneView == nil { let scene = Kurumi3DView(frame: petRect()); view.addSubview(scene); sceneView = scene }
-        sceneView?.frame = petRect()
+        if sceneView?.frame != petRect() { sceneView?.frame = petRect() }
+        let studyWasAnimating = sceneView?.rig.headStudy?.isAnimating == true
         sceneView?.rig.update(time: CACurrentMediaTime(), state: displayState, dragging: dragging,
             reduced: reducedMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        if studyWasAnimating { sceneView?.needsDisplay = true }
     }
 
     @objc private func changeSize(_ sender: NSMenuItem) {

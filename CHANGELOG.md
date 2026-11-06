@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### 2026-11-06 — native v8 desktop head preview
+
+- Added evaluated Blender mesh export and native SceneKit loading for the actual v8 head, including face/strand UVs and geometric outlines.
+- Added stationary idle, fixed review views, and an eight-second explicit rotation that ends at rest. Removed whole-body action entries while viewing the head study.
+- Added a backed-up renderer-selection script and a native render/idle-transition check. Kept the existing 2D skin available from the menu.
+- Restricted Helper model resources to runtime geometry and textures instead of bundling historical Blender projects.
+
 ### 2026-11-04 — v8 head study
 
 - Replaced Chinese and English homepage examples with the current v8 reference/front/three-quarter comparison; removed earlier GIF and v3 image embeds from the homepage.

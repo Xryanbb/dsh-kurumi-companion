@@ -17,3 +17,7 @@ Tokisaki Kurumi is from *Date A Live*. Character rights belong to their respecti
 ## v8 head study additions
 
 The v8 head geometry, facial UV calibration, layered hair, bonnet, ribbon loops, review scene, and build scripts were created for this companion project with Codex assistance. No external downloadable base model was used. The study reuses the project’s approved 2D reference and existing v2 face texture; its dedicated hair albedo was generated using OpenAI imagegen. See [v8 provenance and the complete texture prompt](assets/kurumi3d/v8/README.md). These additions do not claim authorship of the Kurumi character or the upstream DSH project.
+
+## Native v8 runtime additions
+
+The evaluated-mesh exporter, SceneKit model loader, head-study view controls, renderer-selection script, and native rendering checks are additional implementation work in this companion project. The runtime mesh and textures derive from the v8 study described above; this does not imply ownership of the character or upstream DSH code.

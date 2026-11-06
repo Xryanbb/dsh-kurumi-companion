@@ -12,7 +12,7 @@ Left to right: the approved 2D reference, the v8 front render, and the v8 three-
 
 This iteration revises the face and eye proportions, layered bangs and curled tips, crossed bonnet ribbons, open ribbon loops, and dedicated hair albedo. The head is volumetric mesh geometry; all model images above are actual Blender renders.
 
-**This is an unapproved head-only study.** The side silhouette, headpiece, and hair roots still need improvement. This publication includes no completed body, rig, or actions, and does not replace the running 2D pet.
+**This is an unapproved head-only study.** The side silhouette, headpiece, and hair roots still need improvement. There is no completed body, rig, or character animation. An optional native 3D head preview is now available; it stays still until a view change or one slow rotation is requested.
 
 [Front](assets/kurumi3d/v8/front.png) · [Three-quarter](assets/kurumi3d/v8/quarter.png) · [Side](assets/kurumi3d/v8/side.png) · [Clay geometry view](assets/kurumi3d/v8/clay-quarter.png)
 
@@ -37,6 +37,19 @@ Restart DSH to apply. The installer backs up the previous Helper under `~/.dsh/d
 
 To roll back, quit DSH, move the backed-up Helper back into the plugin directory, restore the `skin.json` backup, and restart.
 
+## Enable the v8 desktop head preview
+
+Quit DSH (or turn off its pet switch) before installing and selecting the new renderer. After installing the Helper and skin above, run:
+
+```sh
+node scripts/enable-v8-head.mjs --dry-run
+node scripts/enable-v8-head.mjs
+```
+
+Restart DSH. Double-click or right-click the head for front, three-quarter, side, and back views, or an eight-second single rotation. Idle is stationary, and every view transition ends at rest. Walking and waving are omitted because this study has no body or rig.
+
+The previous 2D configuration remains available by switching off the v8 head mode in the menu. The selection script backs up `skin.json` before changing the renderer; it does not change chat models or credentials. See the [runtime notes](assets/kurumi3d/v8/RUNTIME.md).
+
 ## Scope
 
 - The DSH BigFish plugin provides session events; this project supplies the macOS Helper adaptation and Kurumi skin.
@@ -44,7 +57,7 @@ To roll back, quit DSH, move the backed-up Helper back into the plugin directory
 - This is a transparent keyframe solution, not Live2D or the Windows version's 100-clip library.
 - Tokisaki Kurumi is a character from *Date A Live*. The pictures are unofficial fan art; see [ASSET_LICENSE.md](ASSET_LICENSE.md).
 - Autoplay loops are disabled. The ribbon response has a new nine-pose sequence; other click responses still use the earlier sparse poses. None is a finished 24 fps transparent video.
-- The current preview is the v8 head study. A complete body, rig, and runtime integration remain unfinished.
+- The current preview is the v8 head study, with optional native desktop viewing. A complete body, rig, and character actions remain unfinished.
 
 ## Sources
 

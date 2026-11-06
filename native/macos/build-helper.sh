@@ -19,9 +19,37 @@ rm -rf "$APP"
 mkdir -p "$(dirname "$BIN")" "$APP/Contents/Resources"
 cp "$PROJECT_ROOT/native/macos/Info.plist" "$APP/Contents/Info.plist"
 ditto --norsrc --noextattr "$ASSET_ROOT" "$APP/Contents/Resources/assets"
-if [[ -d "$PROJECT_ROOT/assets/kurumi3d" ]]; then
-  mkdir -p "$APP/Contents/Resources/assets/kurumi3d"
-  cp -R "$PROJECT_ROOT/assets/kurumi3d/." "$APP/Contents/Resources/assets/kurumi3d/"
+MODEL_ROOT="$PROJECT_ROOT/assets/kurumi3d"
+MODEL_DEST="$APP/Contents/Resources/assets/kurumi3d"
+# Runtime bundles contain only the textures and evaluated geometry they use,
+# never historical .blend projects, review renders, or authoring scripts.
+if [[ -d "$MODEL_ROOT/v2" ]]; then
+  mkdir -p "$MODEL_DEST/v2"
+  for texture in face.png hair.png; do
+    if [[ -f "$MODEL_ROOT/v2/$texture" ]]; then
+      ditto --norsrc --noextattr "$MODEL_ROOT/v2/$texture" "$MODEL_DEST/v2/$texture"
+    fi
+  done
+fi
+if [[ -d "$MODEL_ROOT/v8/runtime" ]]; then
+  for asset in scene.json face.png hair-albedo.png; do
+    if [[ ! -s "$MODEL_ROOT/v8/runtime/$asset" ]]; then
+      echo "Incomplete Kurumi v8 runtime package: missing or empty $asset" >&2
+      exit 2
+    fi
+  done
+  mkdir -p "$MODEL_DEST/v8/runtime"
+  if [[ -s "$MODEL_ROOT/v8/runtime/geometry.bin.gz" ]]; then
+    gzip -dc "$MODEL_ROOT/v8/runtime/geometry.bin.gz" > "$MODEL_DEST/v8/runtime/geometry.bin"
+  elif [[ -s "$MODEL_ROOT/v8/runtime/geometry.bin" ]]; then
+    ditto --norsrc --noextattr "$MODEL_ROOT/v8/runtime/geometry.bin" "$MODEL_DEST/v8/runtime/geometry.bin"
+  else
+    echo "Missing v8 runtime geometry" >&2
+    exit 2
+  fi
+  for asset in scene.json face.png hair-albedo.png; do
+    ditto --norsrc --noextattr "$MODEL_ROOT/v8/runtime/$asset" "$MODEL_DEST/v8/runtime/$asset"
+  done
 fi
 PACKAGE_VERSION="$(node -e 'process.stdout.write(require(process.argv[1]).version)' "$DSH_ROOT/package.json")"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $PACKAGE_VERSION" "$APP/Contents/Info.plist"
@@ -30,6 +58,7 @@ PACKAGE_VERSION="$(node -e 'process.stdout.write(require(process.argv[1]).versio
 SOURCES=(
   "$PROJECT_ROOT/native/macos/Sources/AnimationModel.swift"
   "$PROJECT_ROOT/native/macos/Sources/CustomSkinMotion.swift"
+  "$PROJECT_ROOT/native/macos/Sources/KurumiHeadStudy.swift"
   "$PROJECT_ROOT/native/macos/Sources/Kurumi3D.swift"
   "$PROJECT_ROOT/native/macos/Sources/LayoutStore.swift"
   "$PROJECT_ROOT/native/macos/Sources/PetGeometry.swift"

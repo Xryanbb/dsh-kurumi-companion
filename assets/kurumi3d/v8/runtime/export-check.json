@@ -1,0 +1,12 @@
+{
+  "source": "assets/kurumi3d/v8/kurumi-head-study.blend",
+  "sourceSHA256": "f50e519d0efd540349d4a6c77cab0225a1c43e502ea77d4cdd39a1cd8b5e87e7",
+  "meshParts": 104,
+  "vertices": 725731,
+  "triangles": 1373408,
+  "bytes": 39704288,
+  "referencePanelsIncluded": false,
+  "animations": 0,
+  "coordinateTransform": "Blender (x,y,z) to SceneKit (x,z,-y)",
+  "materialConversion": "Face UV and alpha/front-normal mask; strand UV; linear material colors; inverted ink hulls"
+}

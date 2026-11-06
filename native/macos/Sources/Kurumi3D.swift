@@ -5,6 +5,10 @@ import SceneKit
 final class Kurumi3DRig {
     let scene = SCNScene()
     let root = SCNNode()
+    private(set) var headStudy: KurumiHeadStudy?
+    private(set) var loadError: String?
+    var isHeadStudy: Bool { headStudy != nil }
+    var isHeadStudyRequested: Bool { isHeadStudy || loadError != nil }
     let body = SCNNode()
     let head = SCNNode()
     let leftArm = SCNNode(), rightArm = SCNNode()
@@ -269,6 +273,16 @@ final class Kurumi3DRig {
     }
     init() {
         scene.background.contents = NSColor.clear
+        if let package = KurumiHeadStudy.runtimeURL {
+            do {
+                headStudy = try KurumiHeadStudy(url: package, scene: scene, root: root)
+            } catch {
+                loadError = error.localizedDescription
+                FileHandle.standardError.write(Data("Kurumi v8 load failed: \(error.localizedDescription)\n".utf8))
+            }
+            // A broken requested v8 package must not silently show the old model.
+            return
+        }
         let faceTexture = Self.texture("face")
         let faceMaterial = Self.material(0xfff0e5)
         if let texture = faceTexture {
@@ -444,12 +458,17 @@ final class Kurumi3DRig {
         rim.position = SCNVector3(3,3,-3); scene.rootNode.addChildNode(rim)
     }
     func interact(_ action: String, at time: Double) {
+        if isHeadStudyRequested { return }
         if action == "turn" { turnBase = turn; turnDirection *= -1; turnStart = time; turnUntil = time+3 }
         else if action == "nod" { nodUntil = time+2.6 }
         else if action == "walk" { walkUntil = time+4 }
         else { interactionUntil = time+2.4 }
     }
     func update(time: Double, state: String, dragging: Bool, reduced: Bool) {
+        if isHeadStudyRequested {
+            headStudy?.update(time: time, reducedMotion: reduced)
+            return
+        }
         let dt = max(0,min(0.1,time-(lastTime ?? time))); lastTime = time
         phase += reduced ? 0 : dt
         let t = CGFloat(phase), blend = CGFloat(1-exp(-dt*6))
@@ -488,9 +507,26 @@ final class Kurumi3DView: SCNView {
         super.init(frame: frame, options: nil)
         scene = rig.scene; backgroundColor = .clear
         wantsLayer = true; layer?.isOpaque = false
-        antialiasingMode = .multisampling4X; preferredFramesPerSecond = 30
-        isPlaying = true; rendersContinuously = true
+        antialiasingMode = .multisampling4X; preferredFramesPerSecond = 60
+        isPlaying = !rig.isHeadStudyRequested
+        rendersContinuously = !rig.isHeadStudyRequested
+        if let study = rig.headStudy {
+            pointOfView = study.camera
+            study.fit(in: frame.size)
+        }
+        if let error = rig.loadError {
+            let label = NSTextField(wrappingLabelWithString: "v8 头部小样加载失败\n\(error)")
+            label.textColor = .white
+            label.alignment = .center
+            label.frame = NSRect(x: 8, y: max(8, frame.height / 2 - 45), width: max(20, frame.width - 16), height: 90)
+            label.autoresizingMask = [.width, .minYMargin, .maxYMargin]
+            addSubview(label)
+        }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) unsupported") }
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        rig.headStudy?.fit(in: newSize)
+    }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
